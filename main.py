@@ -8,9 +8,17 @@ from twilio.rest import Client
 
 
 # --- CONFIGURACIÓN DE TWILIO ---
-TWILIO_ACCOUNT_SID = "AC_TU_SID_AQUI"
-TWILIO_AUTH_TOKEN = "TU_TOKEN_AQUI"
-TWILIO_PHONE_NUMBER = "+1234567890" # El número que Twilio te regalará
+# 1. Python busca las llaves secretas en la bóveda de Render
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
+
+# 2. Inicializamos el cliente globalmente si las llaves existen
+if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+    twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+else:
+    twilio_client = None
+    print("⚠️ Advertencia: Credenciales de Twilio no encontradas.")
 # -------------------------------
 
 app = FastAPI(title="Safety App API")
@@ -205,21 +213,27 @@ async def create_alert(alert: AlertCreate):
         # OJO: Como no tienes las llaves reales de Twilio aún, 
         # envolveremos esto en un "try" para que no crashee tu app, solo simule el envío.
         try:
-            twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-            
-            for contacto in contactos:
-                # En la vida real, Twilio exige que los números lleven el código de país (ej. +52 o +1)
-                numero_destino = f"+{contacto['phone_number']}" 
-                
-                # Descomenta la siguiente línea cuando tengas tu cuenta real de Twilio:
-                # message = twilio_client.messages.create(body=mensaje_emergencia, from_=TWILIO_PHONE_NUMBER, to=numero_destino)
-                
-                print(f"✅ SMS Simulado enviado a {contacto['name']} ({numero_destino})")
+            if twilio_client:
+                for contacto in contactos:
+                    # Twilio exige formato E.164. 
+                    # Asegúrate de que el contacto en la app se guarde con el código de país.
+                    # Por ejemplo, para un número en Canadá, si guardas "16727628913", 
+                    # esto lo convertirá en el formato correcto "+16727628913".
+                    numero_destino = f"+{contacto['phone_number']}" 
+                    
+                    # LA LÍNEA REAL: Esto dispara el SMS a la red telefónica
+                    message = twilio_client.messages.create(
+                        body=mensaje_emergencia, 
+                        from_=TWILIO_PHONE_NUMBER, 
+                        to=numero_destino
+                    )
+                    
+                    print(f"✅ SMS REAL enviado a {contacto['name']} ({numero_destino}). ID: {message.sid}")
+            else:
+                print("❌ ERROR: No hay cliente de Twilio configurado. SMS cancelado.")
                 
         except Exception as twilio_error:
-            print("⚠️ Aviso: Twilio no configurado. Simulando envío en consola.")
-            for contacto in contactos:
-                print(f"📱 (Simulación) SMS a {contacto['name']}: {mensaje_emergencia}")
+            print(f"❌ Error de Twilio al enviar SMS: {twilio_error}")
 
         print("-------------------------------------------------\n")
         
