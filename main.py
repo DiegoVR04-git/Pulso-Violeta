@@ -237,10 +237,14 @@ async def create_alert(alert: AlertCreate):
         conn.commit()
 
         # 3. CONSTRUIMOS EL MENSAJE PERSONALIZADO
-        map_link = f"https://www.google.com/maps/search/?api=1&query={alert.latitude},{alert.longitude}"
+        # Extraemos el ID de la alerta que acabamos de guardar en la base de datos
+        id_de_alerta = new_alert['alert_id']
         
-        # Ahora el mensaje lleva el nombre real:
-        mensaje_emergencia = f"🚨 URGENTE: {nombre_persona} ha activado su botón de pánico. Ubicación GPS: {map_link}"
+        # Construimos el link hacia tu nuevo mapa interactivo
+        map_link_en_vivo = f"https://safety-app-api.onrender.com/map/{id_de_alerta}"
+        
+        # Ahora el mensaje lleva el nombre real y el link al Centro de Mando
+        mensaje_emergencia = f"🚨 URGENTE: {nombre_persona} ha activado su botón de pánico. Sigue su ubicación y recorrido en vivo aquí: {map_link_en_vivo}"
 
         print(f"\n🚨 --- TRANSMITIENDO ALERTA DE {nombre_persona.upper()} --- 🚨")
         
