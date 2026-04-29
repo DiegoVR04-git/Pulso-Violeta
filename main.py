@@ -190,7 +190,7 @@ async def create_alert(alert: AlertCreate):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # 1. GUARDAMOS LA ALERTA (Lo que ya hacíamos)
+        # 1. GUARDAMOS LA ALERTA EN LA BASE DE DATOS
         insert_query = """
             INSERT INTO Alerts (user_id, latitude, longitude)
             VALUES (%s, %s, %s) RETURNING alert_id, status, created_at, latitude, longitude;
@@ -198,24 +198,31 @@ async def create_alert(alert: AlertCreate):
         cursor.execute(insert_query, (alert.user_id, alert.latitude, alert.longitude))
         new_alert = cursor.fetchone()
 
-        # 2. BUSCAMOS A LA RED DE APOYO (La nueva magia)
-        # Le preguntamos a la base de datos: "¿Quiénes son los contactos del usuario 1?"
+        # --- 🚀 PASO CLAVE: OBTENER EL NOMBRE REAL DEL USUARIO ---
+        # Buscamos en la tabla Users usando el ID que mandó el celular
+        cursor.execute("SELECT full_name FROM Users WHERE user_id = %s;", (alert.user_id,))
+        user_info = cursor.fetchone()
+        
+        # Si por alguna razón no lo encuentra, usamos un respaldo
+        nombre_persona = user_info['full_name'] if user_info else "Un usuario de SafetyApp"
+        # -------------------------------------------------------
+
+        # 2. BUSCAMOS A LOS PROTECTORES (Contactos)
         cursor.execute("SELECT name, phone_number FROM Contacts WHERE user_id = %s;", (alert.user_id,))
         contactos = cursor.fetchall()
         conn.commit()
 
-        # 3. EL MEGÁFONO: MANDAMOS LOS SMS
+        # 3. CONSTRUIMOS EL MENSAJE PERSONALIZADO
         map_link = f"https://www.google.com/maps/search/?api=1&query={alert.latitude},{alert.longitude}"
-        mensaje_emergencia = f"🚨 URGENTE: El usuario ha activado su botón de pánico. Ubicación GPS: {map_link}"
-
-        print("\n🚨 --- INICIANDO TRANSMISIÓN DE EMERGENCIA --- 🚨")
         
-        # OJO: Como no tienes las llaves reales de Twilio aún, 
-        # envolveremos esto en un "try" para que no crashee tu app, solo simule el envío.
+        # Ahora el mensaje lleva el nombre real:
+        mensaje_emergencia = f"🚨 URGENTE: {nombre_persona} ha activado su botón de pánico. Ubicación GPS: {map_link}"
+
+        print(f"\n🚨 --- TRANSMITIENDO ALERTA DE {nombre_persona.upper()} --- 🚨")
+        
         try:
             if twilio_client:
                 for contacto in contactos:
-                    # El número ya viene perfecto desde la base de datos con el +52 o +1 incluido
                     numero_destino = contacto['phone_number'] 
                     
                     message = twilio_client.messages.create(
@@ -223,16 +230,13 @@ async def create_alert(alert: AlertCreate):
                         from_=TWILIO_PHONE_NUMBER, 
                         to=numero_destino
                     )
-                    
-                    print(f"✅ SMS REAL enviado a {contacto['name']} ({numero_destino}). ID: {message.sid}")
+                    print(f"✅ SMS enviado a {contacto['name']} ({numero_destino})")
             else:
-                print("❌ ERROR: No hay cliente de Twilio configurado. SMS cancelado.")
+                print("❌ Twilio no configurado.")
                 
         except Exception as twilio_error:
-            print(f"❌ Error de Twilio al enviar SMS: {twilio_error}")
+            print(f"❌ Error de Twilio: {twilio_error}")
 
-        print("-------------------------------------------------\n")
-        
         return {"message": "Alerta registrada y red notificada", "alert": new_alert}
 
     except Exception as e:
