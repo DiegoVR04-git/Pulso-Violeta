@@ -5,6 +5,7 @@ from passlib.context import CryptContext
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from twilio.rest import Client
+from fastapi.responses import HTMLResponse
 
 
 # --- CONFIGURACIÓN DE TWILIO ---
@@ -399,6 +400,77 @@ async def add_track_point(point: TrackPoint):
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ENDPOINT PARA MOSTRAR EL MAPA DE RASTREO EN TIEMPO REAL
+@app.get("/map/{alert_id}", response_class=HTMLResponse)
+async def get_emergency_map(alert_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # 1. Obtenemos el recorrido histórico de esta alerta
+        query = """
+            SELECT latitude, longitude, created_at 
+            FROM TrackingData 
+            WHERE alert_id = %s 
+            ORDER BY created_at ASC;
+        """
+        cursor.execute(query, (alert_id,))
+        points = cursor.fetchall()
+
+        if not points:
+            return "<h1>No hay datos de rastreo para esta alerta aún.</h1>"
+
+        # 2. Convertimos los puntos a un formato que JavaScript entienda (Lista de listas)
+        # Ejemplo: [[lat1, lon1], [lat2, lon2]...]
+        path_data = [[p['latitude'], p['longitude']] for p in points]
+        last_point = path_data[-1]
+
+        # 3. Construimos el HTML con Leaflet.js inyectado
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Centro de Mando - Emergencia #{alert_id}</title>
+            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+            <style>
+                #map {{ height: 100vh; width: 100%; }}
+                body {{ margin: 0; padding: 0; font-family: sans-serif; }}
+                .info-box {{ position: absolute; top: 10px; left: 50px; z-index: 1000; background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }}
+            </style>
+        </head>
+        <body>
+            <div class="info-box">
+                <b>🚨 Emergencia en curso</b><br>
+                ID de Alerta: {alert_id}<br>
+                Puntos registrados: {len(path_data)}
+            </div>
+            <div id="map"></div>
+            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+            <script>
+                var path = {path_data};
+                var lastPoint = {last_point};
+                
+                // Inicializamos el mapa en la última ubicación
+                var map = L.map('map').setView(lastPoint, 15);
+                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
+
+                // Dibujamos la línea del recorrido
+                L.polyline(path, {{color: 'red', weight: 5, opacity: 0.7}}).addTo(map);
+                
+                // Ponemos un marcador en la posición actual
+                L.marker(lastPoint).addTo(map)
+                    .bindPopup("<b>Última ubicación vista</b>").openPopup();
+            </script>
+        </body>
+        </html>
+        """
+        return html_content
+    except Exception as e:
+        return f"<h1>Error al cargar el mapa: {str(e)}</h1>"
     finally:
         cursor.close()
         conn.close()
