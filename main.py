@@ -134,15 +134,29 @@ async def register_user(user: UserRegister):
 
 
 
-#Endpoint para agregar un contacto a la lista de contactos del usuario (POST /contacts)
 
+# Endpoint para agregar un contacto a la lista de contactos del usuario (POST /contacts)
 @app.post("/contacts", status_code=201)
 async def create_contact(contact: ContactCreate):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # Insertamos el contacto conectándolo con el user_id
+        # --- ADUANA 1: Bloquear contactos duplicados ---
+        # Verificamos si este usuario ya tiene registrado ese número exacto
+        cursor.execute("SELECT contact_id FROM Contacts WHERE user_id = %s AND phone_number = %s;", (contact.user_id, contact.phone_number))
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail="Este número de teléfono ya está en tu red de emergencia.")
+
+        # --- ADUANA 2: Bloquear si ya tiene 4 contactos ---
+        # Contamos cuántos contactos tiene registrados actualmente
+        cursor.execute("SELECT COUNT(*) as total FROM Contacts WHERE user_id = %s;", (contact.user_id,))
+        resultado = cursor.fetchone()
+        
+        if resultado['total'] >= 4:
+            raise HTTPException(status_code=400, detail="Límite alcanzado: Tienes el máximo de 4 contactos permitidos.")
+
+        # --- SI PASA LAS DOS ADUANAS, GUARDAMOS ---
         insert_query = """
             INSERT INTO Contacts (user_id, name, phone_number)
             VALUES (%s, %s, %s) RETURNING contact_id, name, phone_number;
@@ -153,6 +167,9 @@ async def create_contact(contact: ContactCreate):
         
         return {"message": "Contacto guardado con éxito", "contact": new_contact}
 
+    except HTTPException:
+        conn.rollback()
+        raise # Deja pasar el error 400 limpio hacia el celular
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
