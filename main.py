@@ -71,6 +71,12 @@ class ContactUpdate(BaseModel):
     name: str
     phone_number: str
 
+# NUEVO MODELO PARA EL RASTREO
+class TrackPoint(BaseModel):
+    alert_id: int
+    latitude: float
+    longitude: float
+
 # 3. Database Connection Helper
 def get_db_connection():
     try:
@@ -369,6 +375,27 @@ async def delete_contact(contact_id: int):
     except HTTPException:
         conn.rollback()
         raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ENDPOINT PARA RECIBIR COORDENADAS CONTINUAS
+@app.post("/alerts/track", status_code=201)
+async def add_track_point(point: TrackPoint):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        insert_query = """
+            INSERT INTO TrackingData (alert_id, latitude, longitude)
+            VALUES (%s, %s, %s) RETURNING tracking_id;
+        """
+        cursor.execute(insert_query, (point.alert_id, point.latitude, point.longitude))
+        conn.commit()
+        return {"message": "Punto de rastreo guardado"}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
