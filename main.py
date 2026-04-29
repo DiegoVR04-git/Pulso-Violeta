@@ -215,13 +215,9 @@ async def create_alert(alert: AlertCreate):
         try:
             if twilio_client:
                 for contacto in contactos:
-                    # Twilio exige formato E.164. 
-                    # Asegúrate de que el contacto en la app se guarde con el código de país.
-                    # Por ejemplo, para un número en Canadá, si guardas "16727628913", 
-                    # esto lo convertirá en el formato correcto "+16727628913".
-                    numero_destino = f"+{contacto['phone_number']}" 
+                    # El número ya viene perfecto desde la base de datos con el +52 o +1 incluido
+                    numero_destino = contacto['phone_number'] 
                     
-                    # LA LÍNEA REAL: Esto dispara el SMS a la red telefónica
                     message = twilio_client.messages.create(
                         body=mensaje_emergencia, 
                         from_=TWILIO_PHONE_NUMBER, 
