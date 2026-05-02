@@ -425,32 +425,68 @@ async def get_emergency_map(alert_id: int):
         cursor.execute(query, (alert_id,))
         points = cursor.fetchall()
 
+        # --- OPCIÓN B: PANTALLA DE ESPERA INTELIGENTE (POLLING) ---
         if not points:
-            return "<h1>No hay datos de rastreo para esta alerta aún.</h1>"
+            # Si aún no hay datos, mostramos una pantalla de carga amigable que se recarga sola
+            loading_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Conectando...</title>
+                <style>
+                    body {{ display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; background-color: #F4F4F9; font-family: sans-serif; color: #333; margin: 0; text-align: center; padding: 20px; }}
+                    .spinner {{ border: 5px solid rgba(0,0,0,0.1); width: 50px; height: 50px; border-radius: 50%; border-left-color: #6200EE; animation: spin 1s linear infinite; margin-bottom: 20px; }}
+                    @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+                    h2 {{ margin: 0 0 10px 0; color: #6200EE; }}
+                    p {{ color: #666; max-width: 300px; line-height: 1.5; }}
+                </style>
+                <script>
+                    // Intentar conectarse de nuevo en 3 segundos (3000 ms)
+                    setTimeout(function() {{
+                        window.location.reload(1);
+                    }}, 3000);
+                </script>
+            </head>
+            <body>
+                <div class="spinner"></div>
+                <h2>Conectando con el dispositivo...</h2>
+                <p>Estableciendo conexión GPS segura. Por favor espera en esta pantalla, el mapa aparecerá automáticamente.</p>
+            </body>
+            </html>
+            """
+            return loading_html
 
-        # 2. Convertimos los puntos a un formato que JavaScript entienda (Lista de listas)
-        # Ejemplo: [[lat1, lon1], [lat2, lon2]...]
+        # 2. Si ya hay datos, convertimos los puntos a un formato que JavaScript entienda
         path_data = [[p['latitude'], p['longitude']] for p in points]
         last_point = path_data[-1]
 
-        # 3. Construimos el HTML con Leaflet.js inyectado
+        # 3. Construimos el HTML del Mapa (con auto-actualización en vivo)
         html_content = f"""
         <!DOCTYPE html>
         <html>
         <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Centro de Mando - Emergencia #{alert_id}</title>
             <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
             <style>
                 #map {{ height: 100vh; width: 100%; }}
                 body {{ margin: 0; padding: 0; font-family: sans-serif; }}
-                .info-box {{ position: absolute; top: 10px; left: 50px; z-index: 1000; background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }}
+                .info-box {{ position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1000; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); text-align: center; width: 80%; max-width: 300px; }}
+                .live-indicator {{ color: red; font-weight: bold; animation: blink 1s infinite; }}
+                @keyframes blink {{ 50% {{ opacity: 0; }} }}
             </style>
+            <script>
+                // Actualizar el mapa silenciosamente cada 5 segundos para ver el movimiento
+                setTimeout(function() {{
+                    window.location.reload(1);
+                }}, 5000);
+            </script>
         </head>
         <body>
             <div class="info-box">
-                <b>🚨 Emergencia en curso</b><br>
-                ID de Alerta: {alert_id}<br>
-                Puntos registrados: {len(path_data)}
+                <b><span class="live-indicator">● EN VIVO</span> - Emergencia</b><br>
+                <small>Actualizando ubicación...</small>
             </div>
             <div id="map"></div>
             <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -459,15 +495,15 @@ async def get_emergency_map(alert_id: int):
                 var lastPoint = {last_point};
                 
                 // Inicializamos el mapa en la última ubicación
-                var map = L.map('map').setView(lastPoint, 15);
+                var map = L.map('map').setView(lastPoint, 16);
                 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
 
                 // Dibujamos la línea del recorrido
-                L.polyline(path, {{color: 'red', weight: 5, opacity: 0.7}}).addTo(map);
+                L.polyline(path, {{color: '#FF5252', weight: 5, opacity: 0.8}}).addTo(map);
                 
                 // Ponemos un marcador en la posición actual
                 L.marker(lastPoint).addTo(map)
-                    .bindPopup("<b>Última ubicación vista</b>").openPopup();
+                    .bindPopup("<b>Ubicación actual</b>").openPopup();
             </script>
         </body>
         </html>
