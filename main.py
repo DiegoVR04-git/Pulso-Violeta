@@ -1,4 +1,5 @@
 import os
+from typing import List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -409,6 +410,41 @@ async def add_track_point(point: TrackPoint):
         conn.close()
 
 
+# ENDPOINT PARA RECIBIR MÚLTIPLES COORDENADAS EN LOTE (BATCH)
+@app.post("/alerts/track/batch", status_code=201)
+async def add_track_points_batch(points: List[TrackPoint]):
+    # Validación básica: asegurarse de que hay puntos para guardar
+    if not points:
+        raise HTTPException(status_code=400, detail="La lista de puntos no puede estar vacía")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        # Preparar datos para inserción múltiple (bulk insert)
+        data = [(p.alert_id, p.latitude, p.longitude) for p in points]
+        
+        # Usar executemany para insertar múltiples filas de una sola vez
+        insert_query = """
+            INSERT INTO TrackingData (alert_id, latitude, longitude)
+            VALUES (%s, %s, %s);
+        """
+        cursor.executemany(insert_query, data)
+        conn.commit()
+        
+        return {
+            "message": f"Se guardaron {len(points)} puntos de rastreo exitosamente",
+            "count": len(points)
+        }
+    
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # ENDPOINT PARA MOSTRAR EL MAPA DE RASTREO EN TIEMPO REAL
 @app.get("/map/{alert_id}", response_class=HTMLResponse)
 async def get_emergency_map(alert_id: int):
@@ -480,7 +516,7 @@ async def get_emergency_map(alert_id: int):
                 // Actualizar el mapa silenciosamente cada 5 segundos para ver el movimiento
                 setTimeout(function() {{
                     window.location.reload(1);
-                }}, 5000);
+                }}, 3000);
             </script>
         </head>
         <body>
