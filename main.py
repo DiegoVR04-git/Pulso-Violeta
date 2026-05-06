@@ -516,7 +516,7 @@ async def get_emergency_map(alert_id: int):
                 // Actualizar el mapa silenciosamente cada 5 segundos para ver el movimiento
                 setTimeout(function() {{
                     window.location.reload(1);
-                }}, 3000);
+                }}, 9000);
             </script>
         </head>
         <body>
