@@ -1,5 +1,6 @@
 import os
 from typing import List
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -7,6 +8,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from twilio.rest import Client
 from fastapi.responses import HTMLResponse
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 
 # --- CONFIGURACIÓN DE TWILIO ---
@@ -408,6 +411,78 @@ async def add_track_point(point: TrackPoint):
     finally:
         cursor.close()
         conn.close()
+
+
+# ==================== SISTEMA DE LIMPIEZA AUTOMÁTICA ====================
+
+def limpiar_coordenadas_antiguas():
+    """
+    Función que elimina las coordenadas GPS que tengan más de 7 días de antigüedad.
+    Se ejecuta automáticamente cada día a las 3:00 AM según el CronTrigger.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Calcular la fecha límite (hace 7 días)
+        fecha_limite = datetime.now() - timedelta(days=7)
+        
+        # Ejecutar la consulta para eliminar registros antiguos
+        delete_query = """
+            DELETE FROM TrackingData 
+            WHERE created_at < %s;
+        """
+        cursor.execute(delete_query, (fecha_limite,))
+        
+        # Obtener cantidad de registros eliminados
+        registros_eliminados = cursor.rowcount
+        conn.commit()
+        
+        # Log del resultado
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n✅ [{timestamp}] LIMPIEZA DE BASE DE DATOS COMPLETADA")
+        print(f"   Registros eliminados: {registros_eliminados}")
+        print(f"   Fecha límite: {fecha_limite.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"   Próxima ejecución: 3:00 AM (todos los días)\n")
+        
+    except Exception as e:
+        print(f"\n❌ Error en la limpieza de coordenadas: {str(e)}\n")
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
+
+
+# Inicializar el scheduler en background
+scheduler = BackgroundScheduler()
+
+# Configurar el job: ejecutarse cada día a las 3:00 AM
+scheduler.add_job(
+    limpiar_coordenadas_antiguas,
+    CronTrigger(hour=3, minute=0),
+    id="limpieza_coordenadas",
+    name="Limpieza de coordenadas GPS antiguas",
+    replace_existing=True
+)
+
+
+# Eventos de inicio y parada de la aplicación
+@app.on_event("startup")
+async def startup_event():
+    """Se ejecuta cuando la aplicación inicia"""
+    scheduler.start()
+    print("\n🚀 Scheduler iniciado. Las tareas programadas están activas.\n")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Se ejecuta cuando la aplicación se detiene"""
+    scheduler.shutdown()
+    print("\n🛑 Scheduler detenido.\n")
+
+# =========================================================================
 
 
 # ENDPOINT PARA RECIBIR MÚLTIPLES COORDENADAS EN LOTE (BATCH)
