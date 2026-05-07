@@ -10,6 +10,7 @@ from twilio.rest import Client
 from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 
 # --- CONFIGURACIÓN DE TWILIO ---
@@ -458,10 +459,10 @@ def limpiar_coordenadas_antiguas():
 # Inicializar el scheduler en background
 scheduler = BackgroundScheduler()
 
-# Configurar el job: PRUEBA - ejecutarse a las 3:53 PM (en 5 minutos)
+# Configurar el job: PRUEBA - ejecutarse cada 30 segundos
 scheduler.add_job(
     limpiar_coordenadas_antiguas,
-    CronTrigger(hour=15, minute=53),
+    IntervalTrigger(seconds=30),
     id="limpieza_coordenadas",
     name="Limpieza de coordenadas GPS antiguas",
     replace_existing=True
