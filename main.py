@@ -459,10 +459,10 @@ def limpiar_coordenadas_antiguas():
 # Inicializar el scheduler en background
 scheduler = BackgroundScheduler()
 
-# Configurar el job: PRUEBA - ejecutarse cada 30 segundos
+# Configurar el job: ejecutarse cada día a las 3:00 AM (Hora de México Central)
 scheduler.add_job(
     limpiar_coordenadas_antiguas,
-    IntervalTrigger(seconds=30),
+    CronTrigger(hour=3, minute=0, timezone='America/Mexico_City'),
     id="limpieza_coordenadas",
     name="Limpieza de coordenadas GPS antiguas",
     replace_existing=True
