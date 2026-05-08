@@ -1,6 +1,13 @@
 import os
 from typing import List
 from datetime import datetime, timedelta
+import csv
+import io
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -26,6 +33,14 @@ else:
     twilio_client = None
     print("⚠️ Advertencia: Credenciales de Twilio no encontradas.")
 # -------------------------------
+
+# --- CONFIGURACIÓN DE CORREO (SMTP) ---
+# Usa variables de entorno o configúralas aquí
+SMTP_SERVER = "smtp.gmail.com"  # O tu servidor SMTP preferido
+SMTP_PORT = 587
+CORREO_REMITENTE = os.environ.get("CORREO_REMITENTE", "tu_correo@gmail.com")  # Configura esto
+CONTRASENA_CORREO = os.environ.get("CONTRASENA_CORREO", "tu_contraseña_app")  # Usa contraseña de aplicación
+# ----------------------------------------
 
 app = FastAPI(title="Safety App API")
 
@@ -66,6 +81,7 @@ class AlertCreate(BaseModel):
     user_id: int
     latitude: float
     longitude: float
+    email: str
 
 class UserLogin(BaseModel):
     phone_number: str
@@ -219,12 +235,12 @@ async def create_alert(alert: AlertCreate):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # 1. GUARDAMOS LA ALERTA EN LA BASE DE DATOS
+        # 1. GUARDAMOS LA ALERTA EN LA BASE DE DATOS (con email)
         insert_query = """
-            INSERT INTO Alerts (user_id, latitude, longitude)
-            VALUES (%s, %s, %s) RETURNING alert_id, status, created_at, latitude, longitude;
+            INSERT INTO Alerts (user_id, latitude, longitude, email)
+            VALUES (%s, %s, %s, %s) RETURNING alert_id, status, created_at, latitude, longitude, email;
         """
-        cursor.execute(insert_query, (alert.user_id, alert.latitude, alert.longitude))
+        cursor.execute(insert_query, (alert.user_id, alert.latitude, alert.longitude, alert.email))
         new_alert = cursor.fetchone()
 
         # --- 🚀 PASO CLAVE: OBTENER EL NOMBRE REAL DEL USUARIO ---
@@ -393,6 +409,62 @@ async def delete_contact(contact_id: int):
         conn.close()
 
 
+# ENDPOINT PARA DESACTIVAR UNA ALERTA Y ENVIAR REPORTE (PUT /alerts/{alert_id})
+@app.put("/alerts/{alert_id}")
+async def deactivate_alert(alert_id: int):
+    """
+    Desactiva una alerta (cambia el estado de 'active' a 'inactive') y envía un reporte CSV
+    con todas las coordenadas GPS al correo registrado en la alerta.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        # 1. Obtener el email de la alerta ANTES de desactivarla
+        cursor.execute("SELECT email FROM Alerts WHERE alert_id = %s;", (alert_id,))
+        alert_info = cursor.fetchone()
+        
+        if not alert_info:
+            raise HTTPException(status_code=404, detail="Alerta no encontrada")
+        
+        correo_destino = alert_info['email']
+        
+        # 2. Desactivar la alerta
+        update_query = """
+            UPDATE Alerts 
+            SET status = 'inactive' 
+            WHERE alert_id = %s 
+            RETURNING alert_id, status;
+        """
+        cursor.execute(update_query, (alert_id,))
+        updated_alert = cursor.fetchone()
+        conn.commit()
+        
+        # 3. ENVIAR REPORTE DE EVIDENCIA (en un try/except para no crashear si falla)
+        if correo_destino:
+            try:
+                enviar_reporte_evidencia(alert_id, correo_destino)
+            except Exception as email_error:
+                # Log del error pero NO crashes la app
+                print(f"⚠️ Advertencia: No se pudo enviar el reporte de evidencia: {str(email_error)}")
+        
+        return {
+            "message": "Alerta desactivada exitosamente",
+            "alert": updated_alert,
+            "reporte_enviado": correo_destino is not None
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # ENDPOINT PARA RECIBIR COORDENADAS CONTINUAS
 @app.post("/alerts/track", status_code=201)
 async def add_track_point(point: TrackPoint):
@@ -454,6 +526,110 @@ def limpiar_coordenadas_antiguas():
             conn.close()
         except:
             pass
+
+
+# ==================== FUNCIÓN PARA ENVIAR REPORTE DE EVIDENCIA ====================
+
+def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
+    """
+    Genera un archivo CSV con el historial de coordenadas de una alerta
+    y lo envía por correo al destinatario especificado.
+    
+    Args:
+        alert_id: ID de la alerta
+        correo_destino: Email donde enviar el reporte
+    """
+    try:
+        # 1. OBTENER LOS DATOS DE RASTREO DE LA BASE DE DATOS
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        query = """
+            SELECT latitude, longitude, created_at 
+            FROM TrackingData 
+            WHERE alert_id = %s 
+            ORDER BY created_at ASC;
+        """
+        cursor.execute(query, (alert_id,))
+        tracking_points = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # 2. GENERAR EL CSV EN MEMORIA
+        csv_buffer = io.StringIO()
+        csv_writer = csv.writer(csv_buffer)
+        
+        # Encabezados
+        csv_writer.writerow(['Fecha y Hora', 'Latitud', 'Longitud'])
+        
+        # Datos
+        for point in tracking_points:
+            csv_writer.writerow([
+                point['created_at'].strftime("%Y-%m-%d %H:%M:%S"),
+                point['latitude'],
+                point['longitude']
+            ])
+        
+        csv_content = csv_buffer.getvalue()
+        csv_buffer.close()
+        
+        # 3. CONSTRUIR Y ENVIAR EL CORREO
+        mensaje = MIMEMultipart()
+        mensaje['From'] = CORREO_REMITENTE
+        mensaje['To'] = correo_destino
+        mensaje['Subject'] = f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}"
+        
+        # Cuerpo del correo
+        cuerpo = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif; color: #333;">
+                <h2 style="color: #d32f2f;">🚨 Reporte de Evidencia de Alerta</h2>
+                <p><strong>ID de Alerta:</strong> {alert_id}</p>
+                <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
+                <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
+                capturadas durante esta alerta de emergencia.</p>
+                <hr>
+                <p style="font-size: 12px; color: #666;">
+                    <em>Este es un documento confidencial destinado únicamente al destinatario. 
+                    Safety App no se responsabiliza por el uso inadecuado de esta información.</em>
+                </p>
+            </body>
+        </html>
+        """
+        
+        parte_html = MIMEText(cuerpo, 'html')
+        mensaje.attach(parte_html)
+        
+        # Adjuntar el CSV
+        attachment = MIMEBase('application', 'octet-stream')
+        attachment.set_payload(csv_content.encode())
+        encoders.encode_base64(attachment)
+        attachment.add_header('Content-Disposition', f'attachment; filename= "reporte_alerta_{alert_id}.csv"')
+        mensaje.attach(attachment)
+        
+        # 4. ENVIAR POR SMTP
+        try:
+            servidor_smtp = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+            servidor_smtp.starttls()
+            servidor_smtp.login(CORREO_REMITENTE, CONTRASENA_CORREO)
+            servidor_smtp.send_message(mensaje)
+            servidor_smtp.quit()
+            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO")
+            print(f"   Alerta ID: {alert_id}")
+            print(f"   Destinatario: {correo_destino}")
+            print(f"   Puntos GPS: {len(tracking_points)}\n")
+            
+        except smtplib.SMTPAuthenticationError:
+            print(f"\n❌ Error de autenticación SMTP. Verifica CORREO_REMITENTE y CONTRASENA_CORREO.\n")
+        except smtplib.SMTPException as smtp_error:
+            print(f"\n❌ Error SMTP: {str(smtp_error)}\n")
+            
+    except Exception as e:
+        print(f"\n❌ Error al generar/enviar reporte de evidencia: {str(e)}\n")
+
+# ====================================================================================
 
 
 # Inicializar el scheduler en background
