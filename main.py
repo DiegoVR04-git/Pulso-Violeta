@@ -16,7 +16,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 import sendgrid
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition, To, From
 
 
 # --- CONFIGURACIÓN DE TWILIO ---
@@ -530,7 +529,7 @@ def limpiar_coordenadas_antiguas():
 def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
     """
     Genera un archivo CSV con el historial de coordenadas de una alerta
-    y lo envía por correo al destinatario especificado usando SendGrid API.
+    y lo envía por correo al destinatario especificado usando SendGrid API V3 (JSON puro).
     
     Args:
         alert_id: ID de la alerta
@@ -574,62 +573,78 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         csv_bytes = csv_content.encode('utf-8')
         csv_base64 = base64.b64encode(csv_bytes).decode('utf-8')
         
-        # 4. LEER VARIABLES DE RENDER DIRECTAMENTE
+        # 4. RECUPERAR CREDENCIALES
         api_key = os.environ.get("SENDGRID_API_KEY")
         remitente = os.environ.get("CORREO_REMITENTE")
         
-        # Limpiamos el correo destino por si trae espacios invisibles
-        correo_limpio = correo_destino.strip() if correo_destino else ""
-
+        # 5. LIMPIEZA ROBUSTA DEL CORREO
+        correo_limpio = str(correo_destino).strip() if correo_destino else ""
+        
+        # 6. VALIDACIÓN DEL CORREO
+        if not correo_limpio or "@" not in correo_limpio:
+            print(f"❌ Error: Correo inválido '{correo_limpio}' - no se puede enviar el reporte")
+            return
+        
         if not api_key or not remitente:
             print("❌ Error: Faltan variables de entorno (SENDGRID_API_KEY o CORREO_REMITENTE)")
             return
-
-        # 5. CONSTRUIR EL MENSAJE USANDO SENDGRID
-        mensaje = Mail(
-            from_email=From(remitente),
-            to_emails=To(correo_limpio),
-            subject=f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}",
-            html_content=f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; color: #333;">
-                    <h2 style="color: #d32f2f;">🚨 Reporte de Evidencia de Alerta</h2>
-                    <p><strong>ID de Alerta:</strong> {alert_id}</p>
-                    <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
-                    <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
-                    capturadas durante esta alerta de emergencia.</p>
-                    <hr>
-                    <p style="font-size: 12px; color: #666;">
-                        <em>Este es un documento confidencial destinado únicamente al destinatario. 
-                        Safety App no se responsabiliza por el uso inadecuado de esta información.</em>
-                    </p>
-                </body>
-            </html>
-            """
-        )
         
-        # 6. ADJUNTAR EL ARCHIVO CSV EN BASE64
-        adjunto = Attachment(
-            file_content=FileContent(csv_base64),
-            file_name=FileName(f"evidencia_alerta_{alert_id}.csv"),
-            file_type=FileType("text/csv"),
-            disposition=Disposition("attachment")
-        )
-        mensaje.attachment = adjunto
+        # 7. CONSTRUIR EL PAYLOAD JSON PURO (Estructura oficial SendGrid API V3)
+        mensaje_json = {
+            "personalizations": [
+                {
+                    "to": [
+                        {"email": correo_limpio}
+                    ],
+                    "subject": f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}"
+                }
+            ],
+            "from": {
+                "email": remitente
+            },
+            "content": [
+                {
+                    "type": "text/html",
+                    "value": f"""
+                    <html>
+                        <body style="font-family: Arial, sans-serif; color: #333;">
+                            <h2 style="color: #d32f2f;">🚨 Reporte de Evidencia de Alerta</h2>
+                            <p><strong>ID de Alerta:</strong> {alert_id}</p>
+                            <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
+                            <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
+                            capturadas durante esta alerta de emergencia.</p>
+                            <hr>
+                            <p style="font-size: 12px; color: #666;">
+                                <em>Este es un documento confidencial destinado únicamente al destinatario. 
+                                Safety App no se responsabiliza por el uso inadecuado de esta información.</em>
+                            </p>
+                        </body>
+                    </html>
+                    """
+                }
+            ],
+            "attachments": [
+                {
+                    "content": csv_base64,
+                    "type": "text/csv",
+                    "filename": f"evidencia_{alert_id}.csv",
+                    "disposition": "attachment"
+                }
+            ]
+        }
         
-        # 7. ENVIAR POR SENDGRID API
+        # 8. ENVIAR POR SENDGRID API (Escape Hatch: usar client.mail.send.post directo)
         try:
             sg = sendgrid.SendGridAPIClient(api_key=api_key)
-            respuesta = sg.send(mensaje)
+            respuesta = sg.client.mail.send.post(request_body=mensaje_json)
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO VÍA SENDGRID")
+            print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO VÍA SENDGRID (API V3 JSON)")
             print(f"   Alerta ID: {alert_id}")
             print(f"   Destinatario: {correo_limpio}")
             print(f"   Status Code: {respuesta.status_code}\n")
             
         except Exception as sendgrid_error:
-            # Si vuelve a fallar, traceback nos dirá la línea exacta del bug interno
             print(f"\n❌ Error al enviar con SendGrid: {str(sendgrid_error)}")
             print(traceback.format_exc())
             print("\n")
