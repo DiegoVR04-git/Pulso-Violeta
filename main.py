@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import csv
 import io
 import base64
+import traceback
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -573,10 +574,21 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         csv_bytes = csv_content.encode('utf-8')
         csv_base64 = base64.b64encode(csv_bytes).decode('utf-8')
         
-        # 4. CONSTRUIR EL MENSAJE USANDO SENDGRID
+        # 4. LEER VARIABLES DE RENDER DIRECTAMENTE
+        api_key = os.environ.get("SENDGRID_API_KEY")
+        remitente = os.environ.get("CORREO_REMITENTE")
+        
+        # Limpiamos el correo destino por si trae espacios invisibles
+        correo_limpio = correo_destino.strip() if correo_destino else ""
+
+        if not api_key or not remitente:
+            print("❌ Error: Faltan variables de entorno (SENDGRID_API_KEY o CORREO_REMITENTE)")
+            return
+
+        # 5. CONSTRUIR EL MENSAJE USANDO SENDGRID
         mensaje = Mail(
-            from_email=CORREO_REMITENTE,
-            to_emails=correo_destino,
+            from_email=remitente,
+            to_emails=correo_limpio,
             subject=f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}",
             html_content=f"""
             <html>
@@ -596,7 +608,7 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
             """
         )
         
-        # 5. ADJUNTAR EL ARCHIVO CSV EN BASE64
+        # 6. ADJUNTAR EL ARCHIVO CSV EN BASE64
         adjunto = Attachment(
             file_content=FileContent(csv_base64),
             file_name=FileName(f"evidencia_alerta_{alert_id}.csv"),
@@ -605,23 +617,27 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         )
         mensaje.attachment = adjunto
         
-        # 6. ENVIAR POR SENDGRID API
+        # 7. ENVIAR POR SENDGRID API
         try:
-            sg = sendgrid.SendGridAPIClient(SENDGRID_API_KEY)
+            sg = sendgrid.SendGridAPIClient(api_key=api_key)
             respuesta = sg.send(mensaje)
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO VÍA SENDGRID")
             print(f"   Alerta ID: {alert_id}")
-            print(f"   Destinatario: {correo_destino}")
-            print(f"   Puntos GPS: {len(tracking_points)}")
+            print(f"   Destinatario: {correo_limpio}")
             print(f"   Status Code: {respuesta.status_code}\n")
             
         except Exception as sendgrid_error:
-            print(f"\n❌ Error al enviar con SendGrid: {str(sendgrid_error)}\n")
-            
+            # Si vuelve a fallar, traceback nos dirá la línea exacta del bug interno
+            print(f"\n❌ Error al enviar con SendGrid: {str(sendgrid_error)}")
+            print(traceback.format_exc())
+            print("\n")
+
     except Exception as e:
         print(f"\n❌ Error al generar/enviar reporte de evidencia: {str(e)}\n")
+        print(traceback.format_exc())
+        print("\n")
 
 # ====================================================================================
 
