@@ -16,7 +16,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 import sendgrid
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition, To, From
 
 
 # --- CONFIGURACIÓN DE TWILIO ---
@@ -587,8 +587,8 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
 
         # 5. CONSTRUIR EL MENSAJE USANDO SENDGRID
         mensaje = Mail(
-            from_email=remitente,
-            to_emails=correo_limpio,
+            from_email=From(remitente),
+            to_emails=To(correo_limpio),
             subject=f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}",
             html_content=f"""
             <html>
