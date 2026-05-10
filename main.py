@@ -3,11 +3,7 @@ from typing import List
 from datetime import datetime, timedelta
 import csv
 import io
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
+import base64
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -18,6 +14,8 @@ from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+import sendgrid
+from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 
 
 # --- CONFIGURACIÓN DE TWILIO ---
@@ -34,14 +32,10 @@ else:
     print("⚠️ Advertencia: Credenciales de Twilio no encontradas.")
 # -------------------------------
 
-# --- CONFIGURACIÓN DE CORREO (SMTP_SSL) ---
-# Usa variables de entorno o configúralas aquí
-# NOTA: Se usa SMTP_SSL (puerto 465) en lugar de SMTP + starttls (puerto 587)
-# porque Render tiene restricciones con conexiones TLS en el puerto 587
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465  # Puerto SSL (no 587)
-CORREO_REMITENTE = os.environ.get("CORREO_REMITENTE", "tu_correo@gmail.com")  # Configura esto
-CONTRASENA_CORREO = os.environ.get("CONTRASENA_CORREO", "tu_contraseña_app")  # Usa contraseña de aplicación
+# --- CONFIGURACIÓN DE SENDGRID API ---
+# Usa la API de SendGrid en lugar de SMTP directo (compatible con servidores restrictivos como Render)
+CORREO_REMITENTE = os.environ.get("CORREO_REMITENTE", "tu_correo@sendgrid.com")
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "SG.tu_api_key_aqui")
 # ----------------------------------------
 
 app = FastAPI(title="Safety App API")
@@ -535,7 +529,7 @@ def limpiar_coordenadas_antiguas():
 def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
     """
     Genera un archivo CSV con el historial de coordenadas de una alerta
-    y lo envía por correo al destinatario especificado.
+    y lo envía por correo al destinatario especificado usando SendGrid API.
     
     Args:
         alert_id: ID de la alerta
@@ -575,57 +569,56 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         csv_content = csv_buffer.getvalue()
         csv_buffer.close()
         
-        # 3. CONSTRUIR Y ENVIAR EL CORREO
-        mensaje = MIMEMultipart()
-        mensaje['From'] = CORREO_REMITENTE
-        mensaje['To'] = correo_destino
-        mensaje['Subject'] = f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}"
+        # 3. CONVERTIR CSV A BASE64 (requerido por SendGrid para adjuntos)
+        csv_bytes = csv_content.encode('utf-8')
+        csv_base64 = base64.b64encode(csv_bytes).decode('utf-8')
         
-        # Cuerpo del correo
-        cuerpo = f"""
-        <html>
-            <body style="font-family: Arial, sans-serif; color: #333;">
-                <h2 style="color: #d32f2f;">🚨 Reporte de Evidencia de Alerta</h2>
-                <p><strong>ID de Alerta:</strong> {alert_id}</p>
-                <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
-                <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
-                capturadas durante esta alerta de emergencia.</p>
-                <hr>
-                <p style="font-size: 12px; color: #666;">
-                    <em>Este es un documento confidencial destinado únicamente al destinatario. 
-                    Safety App no se responsabiliza por el uso inadecuado de esta información.</em>
-                </p>
-            </body>
-        </html>
-        """
+        # 4. CONSTRUIR EL MENSAJE USANDO SENDGRID
+        mensaje = Mail(
+            from_email=CORREO_REMITENTE,
+            to_emails=correo_destino,
+            subject=f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}",
+            html_content=f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; color: #333;">
+                    <h2 style="color: #d32f2f;">🚨 Reporte de Evidencia de Alerta</h2>
+                    <p><strong>ID de Alerta:</strong> {alert_id}</p>
+                    <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
+                    <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
+                    capturadas durante esta alerta de emergencia.</p>
+                    <hr>
+                    <p style="font-size: 12px; color: #666;">
+                        <em>Este es un documento confidencial destinado únicamente al destinatario. 
+                        Safety App no se responsabiliza por el uso inadecuado de esta información.</em>
+                    </p>
+                </body>
+            </html>
+            """
+        )
         
-        parte_html = MIMEText(cuerpo, 'html')
-        mensaje.attach(parte_html)
+        # 5. ADJUNTAR EL ARCHIVO CSV EN BASE64
+        adjunto = Attachment(
+            file_content=FileContent(csv_base64),
+            file_name=FileName(f"evidencia_alerta_{alert_id}.csv"),
+            file_type=FileType("text/csv"),
+            disposition=Disposition("attachment")
+        )
+        mensaje.attachment = adjunto
         
-        # Adjuntar el CSV
-        attachment = MIMEBase('application', 'octet-stream')
-        attachment.set_payload(csv_content.encode())
-        encoders.encode_base64(attachment)
-        attachment.add_header('Content-Disposition', f'attachment; filename= "reporte_alerta_{alert_id}.csv"')
-        mensaje.attach(attachment)
-        
-        # 4. ENVIAR POR SMTP_SSL (Puerto 465 para compatibilidad con Render)
+        # 6. ENVIAR POR SENDGRID API
         try:
-            servidor_smtp = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-            servidor_smtp.login(CORREO_REMITENTE, CONTRASENA_CORREO)
-            servidor_smtp.send_message(mensaje)
-            servidor_smtp.quit()
+            sg = sendgrid.SendGridAPIClient(SENDGRID_API_KEY)
+            respuesta = sg.send(mensaje)
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO")
+            print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO VÍA SENDGRID")
             print(f"   Alerta ID: {alert_id}")
             print(f"   Destinatario: {correo_destino}")
-            print(f"   Puntos GPS: {len(tracking_points)}\n")
+            print(f"   Puntos GPS: {len(tracking_points)}")
+            print(f"   Status Code: {respuesta.status_code}\n")
             
-        except smtplib.SMTPAuthenticationError:
-            print(f"\n❌ Error de autenticación SMTP. Verifica CORREO_REMITENTE y CONTRASENA_CORREO.\n")
-        except smtplib.SMTPException as smtp_error:
-            print(f"\n❌ Error SMTP: {str(smtp_error)}\n")
+        except Exception as sendgrid_error:
+            print(f"\n❌ Error al enviar con SendGrid: {str(sendgrid_error)}\n")
             
     except Exception as e:
         print(f"\n❌ Error al generar/enviar reporte de evidencia: {str(e)}\n")
