@@ -34,10 +34,12 @@ else:
     print("⚠️ Advertencia: Credenciales de Twilio no encontradas.")
 # -------------------------------
 
-# --- CONFIGURACIÓN DE CORREO (SMTP) ---
+# --- CONFIGURACIÓN DE CORREO (SMTP_SSL) ---
 # Usa variables de entorno o configúralas aquí
-SMTP_SERVER = "smtp.gmail.com"  # O tu servidor SMTP preferido
-SMTP_PORT = 587
+# NOTA: Se usa SMTP_SSL (puerto 465) en lugar de SMTP + starttls (puerto 587)
+# porque Render tiene restricciones con conexiones TLS en el puerto 587
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 465  # Puerto SSL (no 587)
 CORREO_REMITENTE = os.environ.get("CORREO_REMITENTE", "tu_correo@gmail.com")  # Configura esto
 CONTRASENA_CORREO = os.environ.get("CONTRASENA_CORREO", "tu_contraseña_app")  # Usa contraseña de aplicación
 # ----------------------------------------
@@ -607,10 +609,9 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         attachment.add_header('Content-Disposition', f'attachment; filename= "reporte_alerta_{alert_id}.csv"')
         mensaje.attach(attachment)
         
-        # 4. ENVIAR POR SMTP
+        # 4. ENVIAR POR SMTP_SSL (Puerto 465 para compatibilidad con Render)
         try:
-            servidor_smtp = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-            servidor_smtp.starttls()
+            servidor_smtp = smtplib.SMTP_SSL('smtp.gmail.com', 465)
             servidor_smtp.login(CORREO_REMITENTE, CONTRASENA_CORREO)
             servidor_smtp.send_message(mensaje)
             servidor_smtp.quit()
