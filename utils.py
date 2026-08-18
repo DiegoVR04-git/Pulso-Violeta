@@ -3,9 +3,11 @@ import csv
 import io
 import base64
 import traceback
+import json
+import urllib.request
+from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
-import sendgrid
 from psycopg2.extras import RealDictCursor
 from database import get_db_connection
 
@@ -52,7 +54,7 @@ def limpiar_coordenadas_antiguas():
         except:
             pass
 
-# 3. FUNCIÓN PARA ENVIAR REPORTE DE EVIDENCIA
+# 3. FUNCIÓN PARA ENVIAR REPORTE DE EVIDENCIA CON RESEND Y DOMINIO PROPIO
 def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
     try:
         conn = get_db_connection()
@@ -86,57 +88,71 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         csv_bytes = csv_content.encode('utf-8')
         csv_base64 = base64.b64encode(csv_bytes).decode('utf-8')
         
-        api_key = os.environ.get("SENDGRID_API_KEY")
-        remitente = os.environ.get("CORREO_REMITENTE")
+        # --- CONFIGURACIÓN DE LA API DE RESEND ---
+        api_key = os.environ.get("RESEND_API_KEY")
+        
+        # ¡AQUÍ ESTÁ TU DOMINIO OFICIAL VERIFICADO!
+        remitente = "alertas@northsidekits.ca" 
+        
         correo_limpio = str(correo_destino).strip() if correo_destino else ""
         
         if not correo_limpio or "@" not in correo_limpio:
             print(f"❌ Error: Correo inválido '{correo_limpio}' - no se puede enviar el reporte")
             return
         
-        if not api_key or not remitente:
-            print("❌ Error: Faltan variables de entorno (SENDGRID_API_KEY o CORREO_REMITENTE)")
+        if not api_key:
+            print("❌ Error: Falta la variable de entorno RESEND_API_KEY")
             return
         
-        mensaje_json = {
-            "personalizations": [{"to": [{"email": correo_limpio}], "subject": f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}"}],
-            "from": {"email": remitente},
-            "content": [{
-                "type": "text/html",
-                "value": f"""
-                <html>
-                    <body style="font-family: Arial, sans-serif; color: #333;">
-                        <h2 style="color: #d32f2f;">🚨 Reporte de Evidencia de Alerta</h2>
-                        <p><strong>ID de Alerta:</strong> {alert_id}</p>
-                        <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
-                        <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
-                        capturadas durante esta alerta de emergencia.</p>
-                        <hr>
-                        <p style="font-size: 12px; color: #666;">
-                            <em>Este es un documento confidencial destinado únicamente al destinatario. 
-                            Safety App no se responsabiliza por el uso inadecuado de esta información.</em>
-                        </p>
-                    </body>
-                </html>
-                """
-            }],
-            "attachments": [{"content": csv_base64, "type": "text/csv", "filename": f"evidencia_{alert_id}.csv", "disposition": "attachment"}]
+        # Construimos el payload exacto que pide Resend
+        payload = {
+            "from": remitente,
+            "to": [correo_limpio],
+            "subject": f"Reporte de Evidencia - Safety App [CONFIDENCIAL] - Alerta #{alert_id}",
+            "html": f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; color: #333;">
+                    <h2 style="color: #d32f2f;">🚨 Reporte de Evidencia de Alerta</h2>
+                    <p><strong>ID de Alerta:</strong> {alert_id}</p>
+                    <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
+                    <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
+                    capturadas durante esta alerta de emergencia.</p>
+                    <hr>
+                    <p style="font-size: 12px; color: #666;">
+                        <em>Este es un documento confidencial destinado únicamente al destinatario. 
+                        Safety App no se responsabiliza por el uso inadecuado de esta información.</em>
+                    </p>
+                </body>
+            </html>
+            """,
+            "attachments": [
+                {
+                    "filename": f"evidencia_{alert_id}.csv",
+                    "content": csv_base64
+                }
+            ]
         }
         
+        # Configuramos la petición HTTP pura para la API de Resend
+        req = urllib.request.Request("https://api.resend.com/emails")
+        req.add_header("Authorization", f"Bearer {api_key}")
+        req.add_header("Content-Type", "application/json")
+        
         try:
-            sg = sendgrid.SendGridAPIClient(api_key=api_key)
-            respuesta = sg.client.mail.send.post(request_body=mensaje_json)
+            # Disparamos la petición a la nube de Resend
+            response = urllib.request.urlopen(req, data=json.dumps(payload).encode('utf-8'))
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO VÍA SENDGRID")
-            print(f"   Alerta ID: {alert_id}\n   Destinatario: {correo_limpio}\n   Status Code: {respuesta.status_code}\n")
+            print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO VÍA RESEND")
+            print(f"   Alerta ID: {alert_id}\n   Destinatario: {correo_limpio}\n   Status Code: {response.getcode()}\n")
             
-        except Exception as sendgrid_error:
-            print(f"\n❌ Error al enviar con SendGrid: {str(sendgrid_error)}")
-            print(traceback.format_exc())
-            print("\n")
+        except HTTPError as e:
+            error_info = e.read().decode('utf-8')
+            print(f"\n❌ Error devuelto por Resend (HTTP {e.code}): {error_info}\n")
+        except URLError as e:
+            print(f"\n❌ Error de red al contactar a Resend: {e.reason}\n")
 
     except Exception as e:
-        print(f"\n❌ Error al generar/enviar reporte de evidencia: {str(e)}\n")
+        print(f"\n❌ Error general al generar/enviar reporte de evidencia: {str(e)}\n")
         print(traceback.format_exc())
         print("\n")
