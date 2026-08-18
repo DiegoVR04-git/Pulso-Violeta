@@ -137,6 +137,7 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         req = urllib.request.Request("https://api.resend.com/emails")
         req.add_header("Authorization", f"Bearer {api_key}")
         req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "SafetyAppBackend/1.0")
         
         try:
             # Disparamos la petición a la nube de Resend
