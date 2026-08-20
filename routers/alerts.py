@@ -46,9 +46,10 @@ async def create_alert(alert: AlertCreate):
         conn.commit()
 
         id_de_alerta = new_alert['alert_id']
-        map_link_en_vivo = f"https://safety-app-api.onrender.com/map/{id_de_alerta}"
-        mensaje_emergencia = f"🚨 URGENTE: {nombre_persona} ha activado su botón de pánico. Sigue su ubicación en vivo: {map_link_en_vivo}"
 
+        # Agregamos un espacio y ? al final del link para proteger el ID de la alerta de la marca de agua de Vonage
+        map_link_en_vivo = f"https://safety-app-api.onrender.com/map/{id_de_alerta}?"
+        mensaje_emergencia = f"🚨 URGENTE: {nombre_persona} ha activado su botón de pánico. Sigue su ubicación en vivo: {map_link_en_vivo} \n"
         print(f"\n🚨 --- TRANSMITIENDO ALERTA DE {nombre_persona.upper()} --- 🚨")
         
         try:
