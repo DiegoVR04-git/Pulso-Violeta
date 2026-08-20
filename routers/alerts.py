@@ -3,23 +3,27 @@ from typing import List
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from psycopg2.extras import RealDictCursor
-from twilio.rest import Client
+
+# --- NUEVAS IMPORTACIONES DE VONAGE ---
+from vonage import Auth, Vonage
+from vonage_messages import Sms
+# --------------------------------------
+
 from database import get_db_connection
 from schemas import AlertCreate, TrackPoint
 from utils import enviar_reporte_evidencia
 
 router = APIRouter(tags=["Alerts"])
 
-# --- CONFIGURACIÓN DE TWILIO ---
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
+# --- CONFIGURACIÓN DE VONAGE ---
+VONAGE_API_KEY = os.environ.get("VONAGE_API_KEY")
+VONAGE_API_SECRET = os.environ.get("VONAGE_API_SECRET")
 
-if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
-    twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+if VONAGE_API_KEY and VONAGE_API_SECRET:
+    vonage_client = Vonage(Auth(api_key=VONAGE_API_KEY, api_secret=VONAGE_API_SECRET))
 else:
-    twilio_client = None
-    print("⚠️ Advertencia: Credenciales de Twilio no encontradas.")
+    vonage_client = None
+    print("⚠️ Advertencia: Credenciales de Vonage no encontradas.")
 
 @router.post("/alerts", status_code=201)
 async def create_alert(alert: AlertCreate):
@@ -48,15 +52,23 @@ async def create_alert(alert: AlertCreate):
         print(f"\n🚨 --- TRANSMITIENDO ALERTA DE {nombre_persona.upper()} --- 🚨")
         
         try:
-            if twilio_client:
+            if vonage_client:
                 for contacto in contactos:
                     numero_destino = contacto['phone_number'] 
-                    twilio_client.messages.create(body=mensaje_emergencia, from_=TWILIO_PHONE_NUMBER, to=numero_destino)
-                    print(f"✅ SMS enviado a {contacto['name']} ({numero_destino})")
+                    # Vonage prefiere los números limpios sin el símbolo '+'
+                    numero_limpio = numero_destino.replace("+", "")
+                    
+                    mensaje = Sms(
+                        to=numero_limpio,
+                        from_="SafetyApp", # Puedes poner el nombre de tu app aquí
+                        text=mensaje_emergencia
+                    )
+                    vonage_client.messages.send(mensaje)
+                    print(f"✅ SMS enviado a {contacto['name']} ({numero_destino}) vía Vonage")
             else:
-                print("❌ Twilio no configurado.")
-        except Exception as twilio_error:
-            print(f"❌ Error de Twilio: {twilio_error}")
+                print("❌ Vonage no configurado.")
+        except Exception as vonage_error:
+            print(f"❌ Error de Vonage: {vonage_error}")
 
         return {"message": "Alerta registrada y red notificada", "alert": new_alert}
 
