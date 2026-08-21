@@ -40,6 +40,8 @@ async def register_user(user: UserRegister):
         cursor.close()
         conn.close()
 
+        
+
 @router.post("/login")
 async def login_user(user: UserLogin):
     conn = get_db_connection()
@@ -51,12 +53,22 @@ async def login_user(user: UserLogin):
         if not db_user or not verify_password(user.password, db_user['password_hash']):
             raise HTTPException(status_code=401, detail="Teléfono o contraseña incorrectos")
 
-        #  Empaquetamos el correo en la respuesta usando .get() por seguridad 
+        # 👇 EL TRUCO MAESTRO: Buscar el correo en tu historial de alertas 👇
+        cursor.execute("""
+            SELECT email FROM Alerts 
+            WHERE user_id = %s AND email IS NOT NULL AND email != 'anonimo' 
+            ORDER BY created_at DESC LIMIT 1;
+        """, (db_user['user_id'],))
+        historial = cursor.fetchone()
+        
+        # Si encuentra un correo anterior tuyo, lo usa. Si no, manda anonimo.
+        correo_recuperado = historial['email'] if historial else 'anonimo'
+
         return {
             "message": "Inicio de sesión exitoso", 
             "user_id": db_user['user_id'],
             "full_name": db_user['full_name'],
-            "email": db_user.get('email', 'anonimo') 
+            "email": correo_recuperado 
         }
     except HTTPException:
         raise
