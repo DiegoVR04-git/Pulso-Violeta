@@ -30,15 +30,8 @@ async def create_alert(alert: AlertCreate):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        # --- PARCHE DE SEGURIDAD PARA EL CORREO ---
-        correo_final = alert.email
-        if not correo_final or correo_final == "anonimo":
-            # Si la app móvil falló, el backend rescata el correo directamente de la base de datos
-            cursor.execute("SELECT email FROM Users WHERE user_id = %s;", (alert.user_id,))
-            user_data = cursor.fetchone()
-            if user_data and user_data['email']:
-                correo_final = user_data['email']
-        # ------------------------------------------
+        # Limpiamos el correo: si llega "anonimo" o vacío, lo ponemos como nulo (None)
+        correo_final = alert.email if alert.email and alert.email != "anonimo" else None
 
         insert_query = """
             INSERT INTO Alerts (user_id, latitude, longitude, email)
@@ -47,6 +40,7 @@ async def create_alert(alert: AlertCreate):
         cursor.execute(insert_query, (alert.user_id, alert.latitude, alert.longitude, correo_final))
         new_alert = cursor.fetchone()
 
+        # ... (De aquí hacia abajo el código se queda igual, buscando el full_name y contactos)
         cursor.execute("SELECT full_name FROM Users WHERE user_id = %s;", (alert.user_id,))
         user_info = cursor.fetchone()
         nombre_persona = user_info['full_name'] if user_info else "Un usuario de SafetyApp"
