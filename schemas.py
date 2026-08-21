@@ -34,3 +34,11 @@ class TrackPoint(BaseModel):
     alert_id: int
     latitude: float
     longitude: float
+
+#Modelo para actualizar el perfil del usuario
+class UserProfileUpdate(BaseModel):
+    full_name: str
+    phone_number: str
+    email: str
+
+    

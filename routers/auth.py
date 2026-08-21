@@ -40,7 +40,7 @@ async def register_user(user: UserRegister):
         cursor.close()
         conn.close()
 
-        
+
 
 @router.post("/login")
 async def login_user(user: UserLogin):
@@ -73,6 +73,33 @@ async def login_user(user: UserLogin):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# RUTA PARA ACTUALIZAR EL PERFIL DEL USUARIO
+@router.put("/users/{user_id}/profile")
+async def update_profile(user_id: int, profile: UserProfileUpdate):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        update_query = """
+            UPDATE Users 
+            SET full_name = %s, phone_number = %s, email = %s 
+            WHERE user_id = %s;
+        """
+        cursor.execute(update_query, (profile.full_name, profile.phone_number, profile.email, user_id))
+        conn.commit()
+        return {"message": "Perfil actualizado con éxito"}
+
+    except psycopg2.errors.UniqueViolation:
+        # Aquí atrapamos el rebote de la base de datos si el número ya existe
+        conn.rollback()
+        raise HTTPException(status_code=400, detail="Este número de teléfono ya está registrado en otra cuenta.")
+    except Exception as e:
+        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
