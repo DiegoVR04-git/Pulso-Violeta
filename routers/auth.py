@@ -51,10 +51,12 @@ async def login_user(user: UserLogin):
         if not db_user or not verify_password(user.password, db_user['password_hash']):
             raise HTTPException(status_code=401, detail="Teléfono o contraseña incorrectos")
 
+        #  Empaquetamos el correo en la respuesta usando .get() por seguridad 
         return {
             "message": "Inicio de sesión exitoso", 
             "user_id": db_user['user_id'],
-            "full_name": db_user['full_name']
+            "full_name": db_user['full_name'],
+            "email": db_user.get('email', 'anonimo') 
         }
     except HTTPException:
         raise
