@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from psycopg2.extras import RealDictCursor
 import psycopg2
 from database import get_db_connection
-from schemas import UserRegister, UserLogin
+from schemas import UserRegister, UserLogin, UserProfileUpdate
 from utils import get_password_hash, verify_password
 
 # Instanciamos el router
