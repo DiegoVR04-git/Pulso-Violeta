@@ -30,11 +30,21 @@ async def create_alert(alert: AlertCreate):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        # --- PARCHE DE SEGURIDAD PARA EL CORREO ---
+        correo_final = alert.email
+        if not correo_final or correo_final == "anonimo":
+            # Si la app móvil falló, el backend rescata el correo directamente de la base de datos
+            cursor.execute("SELECT email FROM Users WHERE user_id = %s;", (alert.user_id,))
+            user_data = cursor.fetchone()
+            if user_data and user_data['email']:
+                correo_final = user_data['email']
+        # ------------------------------------------
+
         insert_query = """
             INSERT INTO Alerts (user_id, latitude, longitude, email)
             VALUES (%s, %s, %s, %s) RETURNING alert_id, status, created_at, latitude, longitude, email;
         """
-        cursor.execute(insert_query, (alert.user_id, alert.latitude, alert.longitude, alert.email))
+        cursor.execute(insert_query, (alert.user_id, alert.latitude, alert.longitude, correo_final))
         new_alert = cursor.fetchone()
 
         cursor.execute("SELECT full_name FROM Users WHERE user_id = %s;", (alert.user_id,))
