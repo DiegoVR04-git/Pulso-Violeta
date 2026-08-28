@@ -18,7 +18,7 @@ class AlertCreate(BaseModel):
     user_id: int
     latitude: float
     longitude: float
-    email: str
+    sos_email: str
 
 # 4. User Login model
 class UserLogin(BaseModel):
@@ -41,5 +41,6 @@ class UserProfileUpdate(BaseModel):
     full_name: str
     phone_number: str
     email: str
+    sos_email: str
 
     
