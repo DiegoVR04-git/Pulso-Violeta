@@ -6,19 +6,127 @@ from psycopg2.extras import RealDictCursor
 import psycopg2
 from database import get_db_connection
 
-# IMPORTANTE: Asegúrate de tener estos nuevos esquemas en tu schemas.py
 from schemas import (
     UserRegister, UserLogin, UserProfileUpdate, 
     SendCodeRequest, VerifyCodeRequest, ResetPasswordRequest
 )
 from utils import get_password_hash, verify_password
 
-# Configura tu API Key de Resend (Asegúrate de agregarla a tus variables de entorno en Render)
+# Configura tu API Key de Resend
 resend.api_key = os.environ.get("RESEND_API_KEY", "TU_API_KEY_AQUI")
 
 # Instanciamos el router
 router = APIRouter(tags=["Auth"])
 
+
+# ==========================================
+# RUTAS DE VERIFICACIÓN PARA EL REGISTRO
+# ==========================================
+
+@router.post("/auth/send-register-code")
+async def send_register_code(request: SendCodeRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        # 1. Validar que el correo NO esté ya registrado
+        cursor.execute("SELECT user_id FROM Users WHERE email = %s;", (request.email,))
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail="Este correo electrónico ya está registrado.")
+
+        # 2. Generar un código aleatorio de 6 dígitos
+        codigo = str(random.randint(100000, 999999))
+
+        # 3. Guardar o actualizar el código en la base de datos
+        cursor.execute("DELETE FROM verification_codes WHERE email = %s;", (request.email,))
+        cursor.execute(
+            "INSERT INTO verification_codes (email, code) VALUES (%s, %s);", 
+            (request.email, codigo)
+        )
+        conn.commit()
+
+        # 4. Enviar el correo con Resend y captura detallada de error
+        try:
+            print("Intentando enviar correo de registro con Resend...")
+            resend.Emails.send({
+                "from": "soporte@northsidekits.ca",
+                "to": [request.email],
+                "subject": "Código de verificación - Pulso Violeta",
+                "html": f"""
+                <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+                    <h2 style="color: #5F42CA;">Pulso Violeta</h2>
+                    <p>Tu código de verificación para completar el registro es:</p>
+                    <h1 style="background-color: #F4EEFF; padding: 15px; letter-spacing: 5px; color: #37246B; border-radius: 10px;">
+                        {codigo}
+                    </h1>
+                    <p style="color: #666; font-size: 12px;">Si no solicitaste este registro, ignora este mensaje.</p>
+                </div>
+                """
+            })
+            print("¡Correo de registro enviado con éxito por Resend!")
+        except Exception as resend_ex:
+            print(f"❌ ERROR CRÍTICO DE RESEND: {str(resend_ex)}")
+            raise HTTPException(status_code=500, detail=f"Error al enviar correo: {str(resend_ex)}")
+
+        return {"message": "Código de registro enviado"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@router.post("/auth/verify-and-register", status_code=201)
+async def verify_and_register(user: UserRegister, code: str):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        # 1. Validar el código ingresado
+        cursor.execute(
+            "SELECT code FROM verification_codes WHERE email = %s ORDER BY created_at DESC LIMIT 1;", 
+            (user.email,)
+        )
+        record = cursor.fetchone()
+        
+        if not record or record['code'] != code:
+            raise HTTPException(status_code=400, detail="Código de verificación incorrecto o expirado.")
+
+        # 2. Si el código es correcto, creamos el usuario en la base de datos
+        hashed_password = get_password_hash(user.password)
+        insert_query = """
+            INSERT INTO Users (phone_number, full_name, email, password_hash)
+            VALUES (%s, %s, %s, %s) RETURNING user_id, phone_number, full_name, email;
+        """
+        cursor.execute(insert_query, (user.phone_number, user.full_name, user.email, hashed_password))
+        new_user = cursor.fetchone()
+
+        # 3. Limpiar el código usado
+        cursor.execute("DELETE FROM verification_codes WHERE email = %s;", (user.email,))
+        conn.commit()
+
+        return {"message": "Cuenta creada con éxito", "user": new_user}
+
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail="Este número de teléfono ya está registrado en otra cuenta.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ==========================================
+# RUTAS CLÁSICAS DE AUTH (REGISTRO Y LOGIN)
+# ==========================================
 
 @router.post("/register", status_code=201)
 async def register_user(user: UserRegister):
@@ -27,7 +135,6 @@ async def register_user(user: UserRegister):
     
     try:
         hashed_password = get_password_hash(user.password)
-        # SOLUCIÓN 1: Agregamos 'email' al INSERT
         insert_query = """
             INSERT INTO Users (phone_number, full_name, email, password_hash)
             VALUES (%s, %s, %s, %s) RETURNING user_id, phone_number, full_name, email;
@@ -59,13 +166,12 @@ async def login_user(user: UserLogin):
         if not db_user or not verify_password(user.password, db_user['password_hash']):
             raise HTTPException(status_code=401, detail="Teléfono o contraseña incorrectos")
 
-        # ¡Adiós al truco maestro! Ahora tomamos los correos directamente de la tabla Users
         return {
             "message": "Inicio de sesión exitoso", 
             "user_id": db_user['user_id'],
             "full_name": db_user['full_name'],
-            "email": db_user['email'],         # Correo personal
-            "sos_email": db_user['sos_email']  # Correo de emergencias (puede ser null al inicio)
+            "email": db_user['email'],         
+            "sos_email": db_user['sos_email']  
         }
     except HTTPException:
         raise
@@ -82,7 +188,6 @@ async def update_profile(user_id: int, profile: UserProfileUpdate):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # SOLUCIÓN 3: Agregamos 'sos_email' al UPDATE
         update_query = """
             UPDATE Users 
             SET full_name = %s, phone_number = %s, email = %s, sos_email = %s 
@@ -104,7 +209,7 @@ async def update_profile(user_id: int, profile: UserProfileUpdate):
 
 
 # ==========================================
-# RUTAS DE RECUPERACIÓN DE CONTRASEÑA (NUEVO)
+# RUTAS DE RECUPERACIÓN DE CONTRASEÑA
 # ==========================================
 
 @router.post("/auth/send-code")
@@ -172,7 +277,6 @@ async def verify_code(request: VerifyCodeRequest):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # Buscamos el último código generado para este correo
         cursor.execute(
             "SELECT code FROM verification_codes WHERE email = %s ORDER BY created_at DESC LIMIT 1;", 
             (request.email,)
@@ -199,7 +303,6 @@ async def reset_password(request: ResetPasswordRequest):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # 1. Volvemos a verificar el código por seguridad antes de cambiar la contraseña
         cursor.execute(
             "SELECT code FROM verification_codes WHERE email = %s ORDER BY created_at DESC LIMIT 1;", 
             (request.email,)
@@ -209,18 +312,14 @@ async def reset_password(request: ResetPasswordRequest):
         if not record or record['code'] != request.code:
             raise HTTPException(status_code=400, detail="Código inválido. Intenta de nuevo.")
 
-        # 2. Hasheamos la nueva contraseña
         new_hashed_password = get_password_hash(request.new_password)
 
-        # 3. Actualizamos la contraseña en la tabla Users
         cursor.execute(
             "UPDATE Users SET password_hash = %s WHERE email = %s;", 
             (new_hashed_password, request.email)
         )
         
-        # 4. Borramos el código usado para que no se pueda reutilizar
         cursor.execute("DELETE FROM verification_codes WHERE email = %s;", (request.email,))
-        
         conn.commit()
 
         return {"message": "Contraseña actualizada con éxito"}
