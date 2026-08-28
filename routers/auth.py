@@ -131,25 +131,33 @@ async def send_verification_code(request: SendCodeRequest):
         )
         conn.commit()
 
-        # 4. Enviar el correo con Resend
-        resend.Emails.send({
-            "from": "onboarding@resend.dev",
-            "to": [request.email],
-            "subject": "Tu código de seguridad - Pulso Violeta",
-            "html": f"""
-            <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-                <h2 style="color: #5F42CA;">Pulso Violeta</h2>
-                <p>Usa el siguiente código de 6 dígitos para recuperar tu acceso:</p>
-                <h1 style="background-color: #F4EEFF; padding: 15px; letter-spacing: 5px; color: #37246B; border-radius: 10px;">
-                    {codigo}
-                </h1>
-                <p style="color: #666; font-size: 12px;">Si no solicitaste este código, ignora este correo.</p>
-            </div>
-            """
-        })
+        # 4. Enviar el correo con Resend y captura detallada de error
+        try:
+            print("Intentando enviar correo con Resend...")
+            resend.Emails.send({
+                "from": "onboarding@resend.dev",
+                "to": [request.email],
+                "subject": "Tu código de seguridad - Pulso Violeta",
+                "html": f"""
+                <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+                    <h2 style="color: #5F42CA;">Pulso Violeta</h2>
+                    <p>Usa el siguiente código de 6 dígitos para recuperar tu acceso:</p>
+                    <h1 style="background-color: #F4EEFF; padding: 15px; letter-spacing: 5px; color: #37246B; border-radius: 10px;">
+                        {codigo}
+                    </h1>
+                    <p style="color: #666; font-size: 12px;">Si no solicitaste este código, ignora este correo.</p>
+                </div>
+                """
+            })
+            print("¡Correo enviado con éxito por Resend!")
+        except Exception as resend_ex:
+            print(f"❌ ERROR CRÍTICO DE RESEND: {str(resend_ex)}")
+            raise HTTPException(status_code=500, detail=f"Error al enviar correo: {str(resend_ex)}")
 
         return {"message": "Código enviado con éxito"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
