@@ -30,9 +30,10 @@ async def create_alert(alert: AlertCreate):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        # Limpiamos el correo: si llega "anonimo" o vacío, lo ponemos como nulo (None)
-        correo_final = alert.email if alert.email and alert.email != "anonimo" else None
+        # CORRECCIÓN: Leemos 'alert.sos_email' en lugar de 'alert.email'
+        correo_final = alert.sos_email if alert.sos_email and alert.sos_email != "anonimo" else None
 
+        # Nota: En la tabla Alerts mantenemos la columna como 'email', que es el destino del reporte
         insert_query = """
             INSERT INTO Alerts (user_id, latitude, longitude, email)
             VALUES (%s, %s, %s, %s) RETURNING alert_id, status, created_at, latitude, longitude, email;
@@ -40,7 +41,6 @@ async def create_alert(alert: AlertCreate):
         cursor.execute(insert_query, (alert.user_id, alert.latitude, alert.longitude, correo_final))
         new_alert = cursor.fetchone()
 
-        # ... (De aquí hacia abajo el código se queda igual, buscando el full_name y contactos)
         cursor.execute("SELECT full_name FROM Users WHERE user_id = %s;", (alert.user_id,))
         user_info = cursor.fetchone()
         nombre_persona = user_info['full_name'] if user_info else "Un usuario de SafetyApp"
@@ -51,7 +51,6 @@ async def create_alert(alert: AlertCreate):
 
         id_de_alerta = new_alert['alert_id']
 
-        # Agregamos un espacio y ? al final del link para proteger el ID de la alerta de la marca de agua de Vonage
         map_link_en_vivo = f"https://safety-app-api.onrender.com/map/{id_de_alerta}?"
         mensaje_emergencia = f"🚨 URGENTE: {nombre_persona} ha activado su botón de pánico. Sigue su ubicación en vivo: {map_link_en_vivo} \n"
         print(f"\n🚨 --- TRANSMITIENDO ALERTA DE {nombre_persona.upper()} --- 🚨")
@@ -60,12 +59,11 @@ async def create_alert(alert: AlertCreate):
             if vonage_client:
                 for contacto in contactos:
                     numero_destino = contacto['phone_number'] 
-                    # Vonage prefiere los números limpios sin el símbolo '+'
                     numero_limpio = numero_destino.replace("+", "")
                     
                     mensaje = Sms(
                         to=numero_limpio,
-                        from_="SafetyApp", # Puedes poner el nombre de tu app aquí
+                        from_="SafetyApp", 
                         text=mensaje_emergencia
                     )
                     vonage_client.messages.send(mensaje)
