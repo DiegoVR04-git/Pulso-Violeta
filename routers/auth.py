@@ -1,5 +1,6 @@
 import os
 import random
+import time
 import resend
 from fastapi import APIRouter, HTTPException
 from psycopg2.extras import RealDictCursor
@@ -18,6 +19,22 @@ resend.api_key = os.environ.get("RESEND_API_KEY", "TU_API_KEY_AQUI")
 # Instanciamos el router
 router = APIRouter(tags=["Auth"])
 
+# 🛡️ RATE LIMITER: Control de tiempo de espera por correo (60 segundos)
+email_rate_limit = {}
+COOLDOWN_SECONDS = 60
+
+def check_rate_limit(email: str):
+    current_time = time.time()
+    if email in email_rate_limit:
+        elapsed_time = current_time - email_rate_limit[email]
+        if elapsed_time < COOLDOWN_SECONDS:
+            remaining = int(COOLDOWN_SECONDS - elapsed_time)
+            raise HTTPException(
+                status_code=429, 
+                detail=f"Demasiadas solicitudes. Espera {remaining} segundos para solicitar otro código."
+            )
+    email_rate_limit[email] = current_time
+
 
 # ==========================================
 # RUTAS DE VERIFICACIÓN PARA EL REGISTRO
@@ -25,6 +42,8 @@ router = APIRouter(tags=["Auth"])
 
 @router.post("/auth/send-register-code")
 async def send_register_code(request: SendCodeRequest):
+    check_rate_limit(request.email)
+    
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
@@ -214,6 +233,8 @@ async def update_profile(user_id: int, profile: UserProfileUpdate):
 
 @router.post("/auth/send-code")
 async def send_verification_code(request: SendCodeRequest):
+    check_rate_limit(request.email)
+    
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
