@@ -5,6 +5,7 @@ class UserRegister(BaseModel):
     phone_number: str
     full_name: str
     password: str
+    email : str
 
 # 2. Define the expected data for adding a contact
 class ContactCreate(BaseModel):
