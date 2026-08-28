@@ -10,22 +10,17 @@ router = APIRouter(tags=["Auth"])
 
 @router.post("/register", status_code=201)
 async def register_user(user: UserRegister):
-    print(f"\n--- NUEVO INTENTO DE REGISTRO ---")
-    print(f"Nombre: {user.full_name}")
-    print(f"Teléfono: {user.phone_number}")
-    print(f"Longitud de la contraseña recibida: {len(user.password)} caracteres!")
-    print(f"---------------------------------\n")
-
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
         hashed_password = get_password_hash(user.password)
+        # SOLUCIÓN 1: Agregamos 'email' al INSERT
         insert_query = """
-            INSERT INTO Users (phone_number, full_name, password_hash)
-            VALUES (%s, %s, %s) RETURNING user_id, phone_number, full_name;
+            INSERT INTO Users (phone_number, full_name, email, password_hash)
+            VALUES (%s, %s, %s, %s) RETURNING user_id, phone_number, full_name, email;
         """
-        cursor.execute(insert_query, (user.phone_number, user.full_name, hashed_password))
+        cursor.execute(insert_query, (user.phone_number, user.full_name, user.email, hashed_password))
         new_user = cursor.fetchone()
         conn.commit()
         return {"message": "User created successfully", "user": new_user}
@@ -39,7 +34,6 @@ async def register_user(user: UserRegister):
     finally:
         cursor.close()
         conn.close()
-
 
 
 @router.post("/login")
@@ -85,17 +79,17 @@ async def update_profile(user_id: int, profile: UserProfileUpdate):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        # SOLUCIÓN 3: Agregamos 'sos_email' al UPDATE
         update_query = """
             UPDATE Users 
-            SET full_name = %s, phone_number = %s, email = %s 
+            SET full_name = %s, phone_number = %s, email = %s, sos_email = %s 
             WHERE user_id = %s;
         """
-        cursor.execute(update_query, (profile.full_name, profile.phone_number, profile.email, user_id))
+        cursor.execute(update_query, (profile.full_name, profile.phone_number, profile.email, profile.sos_email, user_id))
         conn.commit()
         return {"message": "Perfil actualizado con éxito"}
 
     except psycopg2.errors.UniqueViolation:
-        # Aquí atrapamos el rebote de la base de datos si el número ya existe
         conn.rollback()
         raise HTTPException(status_code=400, detail="Este número de teléfono ya está registrado en otra cuenta.")
     except Exception as e:
