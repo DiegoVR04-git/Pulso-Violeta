@@ -43,4 +43,22 @@ class UserProfileUpdate(BaseModel):
     email: str
     sos_email: str
 
-    
+
+
+#Verification code models
+
+class SendCodeRequest(BaseModel):
+    email: str
+    type: str
+
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
+    type: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
+
