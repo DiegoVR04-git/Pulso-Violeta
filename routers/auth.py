@@ -135,7 +135,7 @@ async def send_verification_code(request: SendCodeRequest):
         try:
             print("Intentando enviar correo con Resend...")
             resend.Emails.send({
-                "from": "onboarding@resend.dev",
+                "from": "soporte@northsidekits.ca",
                 "to": [request.email],
                 "subject": "Tu código de seguridad - Pulso Violeta",
                 "html": f"""
