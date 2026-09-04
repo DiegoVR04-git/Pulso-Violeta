@@ -1,13 +1,9 @@
 import os
 from typing import List
+import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from psycopg2.extras import RealDictCursor
-
-# --- NUEVAS IMPORTACIONES DE VONAGE ---
-from vonage import Auth, Vonage
-from vonage_messages import Sms
-# --------------------------------------
 
 from database import get_db_connection
 from schemas import AlertCreate, TrackPoint
@@ -15,25 +11,83 @@ from utils import enviar_reporte_evidencia
 
 router = APIRouter(tags=["Alerts"])
 
-# --- CONFIGURACIÓN DE VONAGE ---
-VONAGE_API_KEY = os.environ.get("VONAGE_API_KEY")
-VONAGE_API_SECRET = os.environ.get("VONAGE_API_SECRET")
+# --- CONFIGURACIÓN DE WHATSAPP CLOUD API (META) ---
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
+PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "1293372303857206")
 
-if VONAGE_API_KEY and VONAGE_API_SECRET:
-    vonage_client = Vonage(Auth(api_key=VONAGE_API_KEY, api_secret=VONAGE_API_SECRET))
-else:
-    vonage_client = None
-    print("⚠️ Advertencia: Credenciales de Vonage no encontradas.")
+
+async def send_whatsapp_alert(destinatario: str, nombre_persona: str, link_mapa: str) -> bool:
+    """
+    Envía un mensaje de plantilla usando la API oficial de WhatsApp Cloud.
+    """
+    if not WHATSAPP_TOKEN:
+        print("⚠️ Advertencia: WHATSAPP_TOKEN no configurado en variables de entorno.")
+        return False
+
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    # WhatsApp requiere el código de país sin '+', espacios o guiones
+    numero_limpio = destinatario.replace("+", "").replace(" ", "").replace("-", "")
+
+    # 1. PLANTILLA 'hello_world' (Para pruebas inmediatas)
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": numero_limpio,
+        "type": "template",
+        "template": {
+            "name": "hello_world",
+            "language": {
+                "code": "en_US"
+            }
+        }
+    }
+
+    # 2. PLANTILLA PERSONALIZADA 'sos_alerta' (Descomentar cuando esté aprobada en Meta):
+    # payload = {
+    #     "messaging_product": "whatsapp",
+    #     "to": numero_limpio,
+    #     "type": "template",
+    #     "template": {
+    #         "name": "sos_alerta",
+    #         "language": {"code": "es"},
+    #         "components": [
+    #             {
+    #                 "type": "body",
+    #                 "parameters": [
+    #                     {"type": "text", "text": nombre_persona},
+    #                     {"type": "text", "text": link_mapa}
+    #                 ]
+    #             }
+    #         ]
+    #     }
+    # }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
+            res_json = response.json()
+            if response.status_code == 200:
+                print(f"✅ WhatsApp enviado exitosamente a {numero_limpio}")
+                return True
+            else:
+                print(f"❌ Error de WhatsApp API ({response.status_code}): {res_json}")
+                return False
+        except Exception as e:
+            print(f"❌ Error de conexión al enviar WhatsApp: {e}")
+            return False
+
 
 @router.post("/alerts", status_code=201)
 async def create_alert(alert: AlertCreate):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        # CORRECCIÓN: Leemos 'alert.sos_email' en lugar de 'alert.email'
         correo_final = alert.sos_email if alert.sos_email and alert.sos_email != "anonimo" else None
 
-        # Nota: En la tabla Alerts mantenemos la columna como 'email', que es el destino del reporte
         insert_query = """
             INSERT INTO Alerts (user_id, latitude, longitude, email)
             VALUES (%s, %s, %s, %s) RETURNING alert_id, status, created_at, latitude, longitude, email;
@@ -43,37 +97,23 @@ async def create_alert(alert: AlertCreate):
 
         cursor.execute("SELECT full_name FROM Users WHERE user_id = %s;", (alert.user_id,))
         user_info = cursor.fetchone()
-        nombre_persona = user_info['full_name'] if user_info else "Un usuario de SafetyApp"
+        nombre_persona = user_info['full_name'] if user_info else "Un usuario de Pulso Violeta"
 
         cursor.execute("SELECT name, phone_number FROM Contacts WHERE user_id = %s;", (alert.user_id,))
         contactos = cursor.fetchall()
         conn.commit()
 
         id_de_alerta = new_alert['alert_id']
+        map_link_en_vivo = f"https://safety-app-api.onrender.com/map/{id_de_alerta}"
 
-        map_link_en_vivo = f"https://safety-app-api.onrender.com/map/{id_de_alerta}?"
-        mensaje_emergencia = f"🚨 URGENTE: {nombre_persona} ha activado su botón de pánico. Sigue su ubicación en vivo: {map_link_en_vivo} \n"
-        print(f"\n🚨 --- TRANSMITIENDO ALERTA DE {nombre_persona.upper()} --- 🚨")
-        
-        try:
-            if vonage_client:
-                for contacto in contactos:
-                    numero_destino = contacto['phone_number'] 
-                    numero_limpio = numero_destino.replace("+", "")
-                    
-                    mensaje = Sms(
-                        to=numero_limpio,
-                        from_="SafetyApp", 
-                        text=mensaje_emergencia
-                    )
-                    vonage_client.messages.send(mensaje)
-                    print(f"✅ SMS enviado a {contacto['name']} ({numero_destino}) vía Vonage")
-            else:
-                print("❌ Vonage no configurado.")
-        except Exception as vonage_error:
-            print(f"❌ Error de Vonage: {vonage_error}")
+        print(f"\n🚨 --- DISPARANDO ALERTA DE {nombre_persona.upper()} VÍA WHATSAPP --- 🚨")
 
-        return {"message": "Alerta registrada y red notificada", "alert": new_alert}
+        # Iterar sobre los contactos de emergencia y enviarles WhatsApp
+        for contacto in contactos:
+            numero_destino = contacto['phone_number']
+            await send_whatsapp_alert(numero_destino, nombre_persona, map_link_en_vivo)
+
+        return {"message": "Alerta registrada y red notificada vía WhatsApp", "alert": new_alert}
 
     except Exception as e:
         conn.rollback()
@@ -81,6 +121,7 @@ async def create_alert(alert: AlertCreate):
     finally:
         cursor.close()
         conn.close()
+
 
 @router.put("/alerts/{alert_id}")
 async def deactivate_alert(alert_id: int):
@@ -91,20 +132,20 @@ async def deactivate_alert(alert_id: int):
         alert_info = cursor.fetchone()
         if not alert_info:
             raise HTTPException(status_code=404, detail="Alerta no encontrada")
-        
+
         correo_destino = alert_info['email']
-        
+
         update_query = "UPDATE Alerts SET status = 'inactive' WHERE alert_id = %s RETURNING alert_id, status;"
         cursor.execute(update_query, (alert_id,))
         updated_alert = cursor.fetchone()
         conn.commit()
-        
+
         if correo_destino:
             try:
                 enviar_reporte_evidencia(alert_id, correo_destino)
             except Exception as email_error:
                 print(f"⚠️ Advertencia: No se pudo enviar el reporte: {str(email_error)}")
-        
+
         return {"message": "Alerta desactivada", "alert": updated_alert, "reporte_enviado": correo_destino is not None}
 
     except HTTPException:
@@ -116,6 +157,7 @@ async def deactivate_alert(alert_id: int):
     finally:
         cursor.close()
         conn.close()
+
 
 @router.post("/alerts/track", status_code=201)
 async def add_track_point(point: TrackPoint):
@@ -131,6 +173,7 @@ async def add_track_point(point: TrackPoint):
     finally:
         cursor.close()
         conn.close()
+
 
 @router.post("/alerts/track/batch", status_code=201)
 async def add_track_points_batch(points: List[TrackPoint]):
@@ -150,6 +193,7 @@ async def add_track_points_batch(points: List[TrackPoint]):
         cursor.close()
         conn.close()
 
+
 @router.get("/map/{alert_id}", response_class=HTMLResponse)
 async def get_emergency_map(alert_id: int):
     conn = get_db_connection()
@@ -159,9 +203,9 @@ async def get_emergency_map(alert_id: int):
         points = cursor.fetchall()
 
         if not points:
-            return f"""
+            return """
             <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <script>setTimeout(function() {{ window.location.reload(1); }}, 3000);</script></head>
+            <script>setTimeout(function() { window.location.reload(1); }, 3000);</script></head>
             <body style="text-align:center; font-family:sans-serif; margin-top:20vh;">
                 <h2>Conectando con el dispositivo...</h2><p>Estableciendo conexión GPS segura...</p>
             </body></html>
