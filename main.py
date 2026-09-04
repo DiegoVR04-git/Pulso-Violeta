@@ -40,3 +40,25 @@ async def startup_event():
 async def shutdown_event():
     scheduler.shutdown()
     print("\n🛑 Scheduler detenido.\n")
+
+
+
+
+from fastapi import Query, Response
+
+VERIFY_TOKEN = "pulso_violeta_webhook_2026"
+
+@app.get("/webhook")
+async def verify_webhook(
+    hub_mode: str = Query(None, alias="hub.mode"),
+    hub_challenge: str = Query(None, alias="hub.challenge"),
+    hub_verify_token: str = Query(None, alias="hub.verify_token")
+):
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+        return Response(content=hub_challenge, media_type="text/plain")
+    raise HTTPException(status_code=403, detail="Token de verificación inválido")
+
+@app.post("/webhook")
+async def receive_webhook(data: dict):
+    # Procesa eventos o estados de entrega si es necesario
+    return {"status": "received"}
