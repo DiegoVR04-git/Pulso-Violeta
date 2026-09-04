@@ -43,7 +43,7 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
         "template": {
             "name": "sos_alerta",
             "language": {
-                "code": "es"  # Cambiar a "es_MX" si seleccionaste variante regional en Meta
+                "code": "es_MX"  
             },
             "components": [
                 {
