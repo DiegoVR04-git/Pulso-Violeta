@@ -16,9 +16,10 @@ WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
 PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "1293372303857206")
 
 
-async def send_whatsapp_alert(destinatario: str, nombre_persona: str, link_mapa: str) -> bool:
+async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_alerta: int) -> bool:
     """
     Envía un mensaje de plantilla usando la API oficial de WhatsApp Cloud.
+    Usa la plantilla 'sos_alerta' con botón dinámico hacia el mapa en vivo.
     """
     if not WHATSAPP_TOKEN:
         print("⚠️ Advertencia: WHATSAPP_TOKEN no configurado en variables de entorno.")
@@ -32,37 +33,46 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, link_mapa:
 
     # WhatsApp requiere el código de país sin '+', espacios o guiones
     numero_limpio = destinatario.replace("+", "").replace(" ", "").replace("-", "")
+    link_mapa = f"https://safety-app-api.onrender.com/map/{id_de_alerta}"
 
-    # 1. PLANTILLA 'hello_world' (Para pruebas inmediatas)
+    # 1. PLANTILLA OFICIAL 'sos_alerta'
     payload = {
         "messaging_product": "whatsapp",
         "to": numero_limpio,
         "type": "template",
         "template": {
-            "name": "hello_world",
+            "name": "sos_alerta",
             "language": {
-                "code": "en_US"
-            }
+                "code": "es"  # Cambiar a "es_MX" si seleccionaste variante regional en Meta
+            },
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": nombre_persona},
+                        {"type": "text", "text": link_mapa}
+                    ]
+                },
+                {
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": "0",
+                    "parameters": [
+                        {"type": "text", "text": str(id_de_alerta)}
+                    ]
+                }
+            ]
         }
     }
 
-    # 2. PLANTILLA PERSONALIZADA 'sos_alerta' (Descomentar cuando esté aprobada en Meta):
+    # 2. RESPALDO TEMPORAL (Descomentar solo si la plantilla sigue en revisión y necesitas probar conectividad)
     # payload = {
     #     "messaging_product": "whatsapp",
     #     "to": numero_limpio,
     #     "type": "template",
     #     "template": {
-    #         "name": "sos_alerta",
-    #         "language": {"code": "es"},
-    #         "components": [
-    #             {
-    #                 "type": "body",
-    #                 "parameters": [
-    #                     {"type": "text", "text": nombre_persona},
-    #                     {"type": "text", "text": link_mapa}
-    #                 ]
-    #             }
-    #         ]
+    #         "name": "hello_world",
+    #         "language": {"code": "en_US"}
     #     }
     # }
 
@@ -71,7 +81,7 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, link_mapa:
             response = await client.post(url, json=payload, headers=headers, timeout=10.0)
             res_json = response.json()
             if response.status_code == 200:
-                print(f"✅ WhatsApp enviado exitosamente a {numero_limpio}")
+                print(f"✅ Alerta WhatsApp entregada a {numero_limpio}")
                 return True
             else:
                 print(f"❌ Error de WhatsApp API ({response.status_code}): {res_json}")
@@ -104,14 +114,13 @@ async def create_alert(alert: AlertCreate):
         conn.commit()
 
         id_de_alerta = new_alert['alert_id']
-        map_link_en_vivo = f"https://safety-app-api.onrender.com/map/{id_de_alerta}"
 
         print(f"\n🚨 --- DISPARANDO ALERTA DE {nombre_persona.upper()} VÍA WHATSAPP --- 🚨")
 
         # Iterar sobre los contactos de emergencia y enviarles WhatsApp
         for contacto in contactos:
             numero_destino = contacto['phone_number']
-            await send_whatsapp_alert(numero_destino, nombre_persona, map_link_en_vivo)
+            await send_whatsapp_alert(numero_destino, nombre_persona, id_de_alerta)
 
         return {"message": "Alerta registrada y red notificada vía WhatsApp", "alert": new_alert}
 
@@ -164,7 +173,10 @@ async def add_track_point(point: TrackPoint):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute("INSERT INTO TrackingData (alert_id, latitude, longitude) VALUES (%s, %s, %s) RETURNING tracking_id;", (point.alert_id, point.latitude, point.longitude))
+        cursor.execute(
+            "INSERT INTO TrackingData (alert_id, latitude, longitude) VALUES (%s, %s, %s) RETURNING tracking_id;",
+            (point.alert_id, point.latitude, point.longitude)
+        )
         conn.commit()
         return {"message": "Punto guardado"}
     except Exception as e:
@@ -199,7 +211,10 @@ async def get_emergency_map(alert_id: int):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute("SELECT latitude, longitude, created_at FROM TrackingData WHERE alert_id = %s ORDER BY created_at ASC;", (alert_id,))
+        cursor.execute(
+            "SELECT latitude, longitude, created_at FROM TrackingData WHERE alert_id = %s ORDER BY created_at ASC;",
+            (alert_id,)
+        )
         points = cursor.fetchall()
 
         if not points:
