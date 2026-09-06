@@ -35,33 +35,16 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
     numero_limpio = destinatario.replace("+", "").replace(" ", "").replace("-", "")
     link_mapa = f"https://safety-app-api.onrender.com/map/{id_de_alerta}"
 
-    # 1. PLANTILLA OFICIAL 'sos_alerta'
+# payload = { ... tu código de sos_alerta ... }
+
+    # RESPALDO TEMPORAL PARA DIAGNÓSTICO:
     payload = {
         "messaging_product": "whatsapp",
         "to": numero_limpio,
         "type": "template",
         "template": {
-            "name": "sos_alerta",
-            "language": {
-                "code": "es_MX"
-            },
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": nombre_persona},
-                        {"type": "text", "text": link_mapa}
-                    ]
-                },
-                {
-                    "type": "button",
-                    "sub_type": "url",
-                    "index": "0",
-                    "parameters": [
-                        {"type": "text", "text": str(id_de_alerta)}
-                    ]
-                }
-            ]
+            "name": "hello_world",
+            "language": {"code": "en_US"}
         }
     }
 
