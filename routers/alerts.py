@@ -13,8 +13,7 @@ router = APIRouter(tags=["Alerts"])
 
 # --- CONFIGURACIÓN DE WHATSAPP CLOUD API (META) ---
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
-PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "1293372303857206")
-
+PHONE_NUMBER_ID = os.environ["WHATSAPP_PHONE_NUMBER_ID"]
 
 async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_alerta: int) -> bool:
     """
