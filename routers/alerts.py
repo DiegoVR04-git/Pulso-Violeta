@@ -1,4 +1,5 @@
 import os
+import asyncio
 from typing import List
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -8,21 +9,21 @@ from psycopg2.extras import RealDictCursor
 from database import get_db_connection
 from schemas import AlertCreate, TrackPoint
 from utils import enviar_reporte_evidencia
+from whatsapp_results import classify_response, summarize_results
 
 router = APIRouter(tags=["Alerts"])
 
 # --- CONFIGURACIÓN DE WHATSAPP CLOUD API (META) ---
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
-PHONE_NUMBER_ID = os.environ["WHATSAPP_PHONE_NUMBER_ID"]
+PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 
-async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_alerta: int) -> bool:
+async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_alerta: int) -> dict:
     """
     Envía un mensaje de plantilla usando la API oficial de WhatsApp Cloud.
     Usa la plantilla 'sos_alerta' con botón dinámico hacia el mapa en vivo.
     """
-    if not WHATSAPP_TOKEN:
-        print("⚠️ Advertencia: WHATSAPP_TOKEN no configurado en variables de entorno.")
-        return False
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        return {"status": "failed", "message_id": None, "error_code": "not_configured"}
 
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {
@@ -76,17 +77,19 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
 
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
-            res_json = response.json()
-            if response.status_code == 200:
-                print(f"✅ Alerta WhatsApp entregada a {numero_limpio}")
-                return True
-            else:
-                print(f"❌ Error de WhatsApp API ({response.status_code}): {res_json}")
-                return False
-        except Exception as e:
-            print(f"❌ Error de conexión al enviar WhatsApp: {e}")
-            return False
+            response = await asyncio.wait_for(
+                client.post(url, json=payload, headers=headers, timeout=10.0),
+                timeout=12.0,
+            )
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            return classify_response(response.status_code, body)
+        except Exception:
+            # Un timeout no demuestra que Meta haya rechazado el mensaje.
+            # No reintentar automáticamente: podría duplicar la alerta.
+            return {"status": "unknown", "message_id": None, "error_code": "request_unconfirmed"}
 
 
 @router.post("/alerts", status_code=201)
@@ -107,20 +110,28 @@ async def create_alert(alert: AlertCreate):
         user_info = cursor.fetchone()
         nombre_persona = user_info['full_name'] if user_info else "Un usuario de Pulso Violeta"
 
-        cursor.execute("SELECT name, phone_number FROM Contacts WHERE user_id = %s;", (alert.user_id,))
+        cursor.execute("SELECT contact_id, name, phone_number FROM Contacts WHERE user_id = %s ORDER BY contact_id;", (alert.user_id,))
         contactos = cursor.fetchall()
         conn.commit()
 
         id_de_alerta = new_alert['alert_id']
 
-        print(f"\n🚨 --- DISPARANDO ALERTA DE {nombre_persona.upper()} VÍA WHATSAPP --- 🚨")
+        # Los cuatro contactos permitidos se procesan concurrentemente.
+        outcomes = await asyncio.gather(*(
+            send_whatsapp_alert(contacto['phone_number'], nombre_persona, id_de_alerta)
+            for contacto in contactos
+        ), return_exceptions=True)
+        results = []
+        for contacto, outcome in zip(contactos, outcomes):
+            if isinstance(outcome, BaseException):
+                outcome = {"status": "unknown", "message_id": None, "error_code": "request_unconfirmed"}
+            results.append({"contact_id": contacto['contact_id'], "name": contacto['name'], **outcome})
 
-        # Iterar sobre los contactos de emergencia y enviarles WhatsApp
-        for contacto in contactos:
-            numero_destino = contacto['phone_number']
-            await send_whatsapp_alert(numero_destino, nombre_persona, id_de_alerta)
-
-        return {"message": "Alerta registrada y red notificada vía WhatsApp", "alert": new_alert}
+        return {
+            "message": "Alerta registrada. Consulta el resultado de WhatsApp por contacto.",
+            "alert": new_alert,
+            "whatsapp": {"results": results, "summary": summarize_results(results)},
+        }
 
     except Exception as e:
         conn.rollback()
@@ -254,3 +265,4 @@ async def get_emergency_map(alert_id: int):
     finally:
         cursor.close()
         conn.close()
+
