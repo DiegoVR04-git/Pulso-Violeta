@@ -146,10 +146,17 @@ async def deactivate_alert(alert_id: int):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute("SELECT email FROM Alerts WHERE alert_id = %s;", (alert_id,))
+        cursor.execute("SELECT email, status FROM Alerts WHERE alert_id = %s FOR UPDATE;", (alert_id,))
         alert_info = cursor.fetchone()
         if not alert_info:
             raise HTTPException(status_code=404, detail="Alerta no encontrada")
+
+        # Reintentar un cierre ya confirmado no vuelve a enviar el reporte.
+        if alert_info['status'] == 'inactive':
+            conn.commit()
+            return {"message": "Alerta ya desactivada",
+                    "alert": {"alert_id": alert_id, "status": "inactive"},
+                    "reporte_enviado": False}
 
         correo_destino = alert_info['email']
 
@@ -265,4 +272,3 @@ async def get_emergency_map(alert_id: int):
     finally:
         cursor.close()
         conn.close()
-
