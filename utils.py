@@ -4,6 +4,7 @@ import io
 import base64
 import traceback
 import json
+from html import escape
 import urllib.request
 from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta
@@ -54,8 +55,36 @@ def limpiar_coordenadas_antiguas():
         except:
             pass
 
+def _whatsapp_report_html(snapshot):
+    """Renderiza únicamente la copia capturada al cerrar; no consulta estados nuevos."""
+    heading = '<h3>Estado de los mensajes de WhatsApp al cerrar la alerta</h3>'
+    if snapshot is None:
+        return heading + '<p>No se pudieron consultar los estados al cierre.</p>'
+    captured = escape(str(snapshot['captured_at']))
+    note = (f'<p>Consulta durante el cierre (UTC): {captured}</p>'
+            '<p>Últimos estados conocidos por el servidor en ese momento. '
+            'Las confirmaciones posteriores no se reflejan en este reporte. '
+            'Aceptado no significa entregado; la ausencia de confirmación de lectura '
+            'no demuestra que el mensaje no se haya leído.</p>')
+    results = snapshot['results']
+    if not results:
+        return heading + note + '<p>No hay registros de seguimiento de WhatsApp para esta alerta.</p>'
+    labels = {'accepted': 'Aceptado por WhatsApp', 'pending': 'Pendiente',
+              'sent': 'Enviado', 'delivered': 'Entregado', 'read': 'Leído',
+              'failed': 'Falló el envío', 'unknown': 'Sin confirmación'}
+    rows = []
+    for item in results:
+        name = escape(str(item.get('name') or 'Contacto'))
+        state = labels.get(item.get('status'), 'Sin confirmación')
+        rows.append(f'<tr><td style="padding:8px;border:1px solid #ddd;">{name}</td>'
+                    f'<td style="padding:8px;border:1px solid #ddd;">{state}</td></tr>')
+    return (heading + note + '<table style="border-collapse:collapse;">'
+            '<thead><tr><th scope="col">Contacto</th><th scope="col">Estado</th></tr></thead>'
+            '<tbody>' + ''.join(rows) + '</tbody></table>')
+
+
 # 3. FUNCIÓN PARA ENVIAR REPORTE DE EVIDENCIA CON RESEND Y DOMINIO PROPIO
-def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
+def enviar_reporte_evidencia(alert_id: int, correo_destino: str, whatsapp_snapshot=None):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -98,11 +127,11 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         
         if not correo_limpio or "@" not in correo_limpio:
             print(f"❌ Error: Correo inválido '{correo_limpio}' - no se puede enviar el reporte")
-            return
+            return False
         
         if not api_key:
             print("❌ Error: Falta la variable de entorno RESEND_API_KEY")
-            return
+            return False
         
         # Construimos el payload exacto que pide Resend
         payload = {
@@ -117,6 +146,7 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
                     <p><strong>Total de puntos GPS registrados:</strong> {len(tracking_points)}</p>
                     <p>Este archivo contiene un registro histórico de todas las coordenadas GPS 
                     capturadas durante esta alerta de emergencia.</p>
+                    {_whatsapp_report_html(whatsapp_snapshot)}
                     <hr>
                     <p style="font-size: 12px; color: #666;">
                         <em>Este es un documento confidencial destinado únicamente al destinatario. 
@@ -141,12 +171,15 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         
         try:
             # Disparamos la petición a la nube de Resend
-            response = urllib.request.urlopen(req, data=json.dumps(payload).encode('utf-8'))
+            with urllib.request.urlopen(req, data=json.dumps(payload).encode('utf-8'), timeout=10) as response:
+                response_code = response.getcode()
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"\n✅ [{timestamp}] REPORTE DE EVIDENCIA ENVIADO VÍA RESEND")
-            print(f"   Alerta ID: {alert_id}\n   Destinatario: {correo_limpio}\n   Status Code: {response.getcode()}\n")
+            print(f"   Alerta ID: {alert_id}\n   Destinatario: {correo_limpio}\n   Status Code: {response_code}\n")
             
+            return 200 <= response_code < 300
+
         except HTTPError as e:
             error_info = e.read().decode('utf-8')
             print(f"\n❌ Error devuelto por Resend (HTTP {e.code}): {error_info}\n")
@@ -157,3 +190,5 @@ def enviar_reporte_evidencia(alert_id: int, correo_destino: str):
         print(f"\n❌ Error general al generar/enviar reporte de evidencia: {str(e)}\n")
         print(traceback.format_exc())
         print("\n")
+
+    return False

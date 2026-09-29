@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import List
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -191,19 +192,39 @@ async def deactivate_alert(alert_id: int):
                     "reporte_enviado": False}
 
         correo_destino = alert_info['email']
+        whatsapp_snapshot = None
+        if correo_destino:
+            # Un fallo de seguimiento no debe impedir confirmar "Estoy a salvo".
+            cursor.execute("SAVEPOINT report_whatsapp")
+            try:
+                captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                cursor.execute("""
+                    SELECT n.name, COALESCE(d.status, n.initial_status) AS status
+                    FROM WhatsAppNotifications n
+                    LEFT JOIN WhatsAppDelivery d ON d.message_id = n.message_id
+                    WHERE n.alert_id = %s ORDER BY n.contact_id
+                """, (alert_id,))
+                whatsapp_snapshot = {"captured_at": captured_at,
+                                     "results": [dict(row) for row in cursor.fetchall()]}
+            except Exception:
+                cursor.execute("ROLLBACK TO SAVEPOINT report_whatsapp")
+                logger.warning("WhatsApp alert_id=%s report_snapshot_unavailable", alert_id)
+            finally:
+                cursor.execute("RELEASE SAVEPOINT report_whatsapp")
 
         update_query = "UPDATE Alerts SET status = 'inactive' WHERE alert_id = %s RETURNING alert_id, status;"
         cursor.execute(update_query, (alert_id,))
         updated_alert = cursor.fetchone()
         conn.commit()
 
+        reporte_enviado = False
         if correo_destino:
             try:
-                enviar_reporte_evidencia(alert_id, correo_destino)
+                reporte_enviado = bool(enviar_reporte_evidencia(alert_id, correo_destino, whatsapp_snapshot))
             except Exception as email_error:
                 print(f"⚠️ Advertencia: No se pudo enviar el reporte: {str(email_error)}")
 
-        return {"message": "Alerta desactivada", "alert": updated_alert, "reporte_enviado": correo_destino is not None}
+        return {"message": "Alerta desactivada", "alert": updated_alert, "reporte_enviado": reporte_enviado}
 
     except HTTPException:
         conn.rollback()
@@ -304,3 +325,4 @@ async def get_emergency_map(alert_id: int):
     finally:
         cursor.close()
         conn.close()
+
