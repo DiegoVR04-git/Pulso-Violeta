@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 from typing import List
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -12,6 +13,7 @@ from utils import enviar_reporte_evidencia
 from whatsapp_results import classify_response, summarize_results
 
 router = APIRouter(tags=["Alerts"])
+logger = logging.getLogger("uvicorn.error")
 
 # --- CONFIGURACIÓN DE WHATSAPP CLOUD API (META) ---
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
@@ -23,6 +25,10 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
     Usa la plantilla 'sos_alerta' con botón dinámico hacia el mapa en vivo.
     """
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        logger.warning(
+            "WhatsApp alert_id=%s configuration_missing token_present=%s phone_number_id_present=%s",
+            id_de_alerta, bool(WHATSAPP_TOKEN), bool(PHONE_NUMBER_ID),
+        )
         return {"status": "failed", "message_id": None, "error_code": "not_configured"}
 
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -85,8 +91,23 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
                 body = response.json()
             except ValueError:
                 body = None
-            return classify_response(response.status_code, body)
-        except Exception:
+            result = classify_response(response.status_code, body)
+            if result["status"] != "accepted":
+                error = body.get("error", {}) if isinstance(body, dict) else {}
+                error = error if isinstance(error, dict) else {}
+                # Solo códigos numéricos; nunca el payload, token, teléfono o texto del proveedor.
+                code = error.get("code")
+                subcode = error.get("error_subcode")
+                logger.warning(
+                    "WhatsApp alert_id=%s http=%s status=%s meta_code=%s meta_subcode=%s template=sos_alerta language=es_MX",
+                    id_de_alerta, response.status_code, result["status"],
+                    code if isinstance(code, int) else None,
+                    subcode if isinstance(subcode, int) else None,
+                )
+            return result
+        except Exception as exc:
+            logger.warning("WhatsApp alert_id=%s request_unconfirmed exception=%s",
+                           id_de_alerta, type(exc).__name__)
             # Un timeout no demuestra que Meta haya rechazado el mensaje.
             # No reintentar automáticamente: podría duplicar la alerta.
             return {"status": "unknown", "message_id": None, "error_code": "request_unconfirmed"}
