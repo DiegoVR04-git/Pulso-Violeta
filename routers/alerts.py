@@ -257,7 +257,7 @@ async def get_emergency_map(alert_id: int):
         <body>
             <div id="map"></div>
             <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-            <scrip
+            <script>
                 var path = {path_data}; var lastPoint = {last_point};
                 var map = L.map('map').setView(lastPoint, 16);
                 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
