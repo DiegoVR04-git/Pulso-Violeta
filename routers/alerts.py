@@ -11,6 +11,7 @@ from database import get_db_connection
 from schemas import AlertCreate, TrackPoint
 from utils import enviar_reporte_evidencia
 from whatsapp_results import classify_response, summarize_results
+from whatsapp_status import prepare_tracking, save_initial_results
 
 router = APIRouter(tags=["Alerts"])
 logger = logging.getLogger("uvicorn.error")
@@ -131,6 +132,7 @@ async def create_alert(alert: AlertCreate):
 
         cursor.execute("SELECT contact_id, name, phone_number FROM Contacts WHERE user_id = %s ORDER BY contact_id;", (alert.user_id,))
         contactos = cursor.fetchall()
+        status_token = prepare_tracking(cursor, new_alert["alert_id"], contactos)
         conn.commit()
 
         id_de_alerta = new_alert['alert_id']
@@ -146,10 +148,21 @@ async def create_alert(alert: AlertCreate):
                 outcome = {"status": "unknown", "message_id": None, "error_code": "request_unconfirmed"}
             results.append({"contact_id": contacto['contact_id'], "name": contacto['name'], **outcome})
 
+        try:
+            save_initial_results(cursor, id_de_alerta, results)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            # La alerta ya está activa y los envíos se intentaron. No devolver
+            # un error de creación que pueda provocar un segundo SOS.
+            status_token = None
+            logger.error("WhatsApp alert_id=%s initial_results_storage_failed", id_de_alerta)
+
         return {
             "message": "Alerta registrada. Consulta el resultado de WhatsApp por contacto.",
             "alert": new_alert,
-            "whatsapp": {"results": results, "summary": summarize_results(results)},
+            "whatsapp": {"results": results, "summary": summarize_results(results),
+                         "status_token": status_token},
         }
 
     except Exception as e:
