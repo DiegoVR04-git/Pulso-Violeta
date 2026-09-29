@@ -39,7 +39,6 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
 
     # WhatsApp requiere el código de país sin '+', espacios o guiones
     numero_limpio = destinatario.replace("+", "").replace(" ", "").replace("-", "")
-    link_mapa = f"https://safety-app-api.onrender.com/map/{id_de_alerta}"
 
     payload = {
             "messaging_product": "whatsapp",
@@ -54,8 +53,7 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
                     {
                         "type": "body",
                         "parameters": [
-                            {"type": "text", "text": nombre_persona},
-                            {"type": "text", "text": link_mapa}
+                            {"type": "text", "text": nombre_persona}
                         ]
                     },
                     {
