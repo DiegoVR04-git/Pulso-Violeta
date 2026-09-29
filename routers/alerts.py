@@ -24,7 +24,7 @@ PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_alerta: int) -> dict:
     """
     Envía un mensaje de plantilla usando la API oficial de WhatsApp Cloud.
-    Usa la plantilla 'sos_alerta' con botón dinámico hacia el mapa en vivo.
+    Usa la plantilla 'sos_alerta_utilidad' con botón dinámico hacia el mapa en vivo.
     """
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
         logger.warning(
@@ -47,7 +47,7 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
             "to": numero_limpio,
             "type": "template",
             "template": {
-                "name": "sos_alerta",
+                "name": "sos_alerta_utilidad",
                 "language": {
                     "code": "es_MX" 
                 },
@@ -99,7 +99,7 @@ async def send_whatsapp_alert(destinatario: str, nombre_persona: str, id_de_aler
                 code = error.get("code")
                 subcode = error.get("error_subcode")
                 logger.warning(
-                    "WhatsApp alert_id=%s http=%s status=%s meta_code=%s meta_subcode=%s template=sos_alerta language=es_MX",
+                    "WhatsApp alert_id=%s http=%s status=%s meta_code=%s meta_subcode=%s template=sos_alerta_utilidad language=es_MX",
                     id_de_alerta, response.status_code, result["status"],
                     code if isinstance(code, int) else None,
                     subcode if isinstance(subcode, int) else None,
@@ -325,4 +325,5 @@ async def get_emergency_map(alert_id: int):
     finally:
         cursor.close()
         conn.close()
+
 
